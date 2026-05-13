@@ -125,6 +125,7 @@ class DatasetThreadStorage extends ThreadStorage {
   final Map<String, ThreadListEntry> _entriesByPath =
       <String, ThreadListEntry>{};
   StreamSubscription<DatasetTableWatchEvent>? _subscription;
+  Future<void>? _refreshEntriesFuture;
   bool _initialSnapshotReady = false;
   bool _closed = true;
 
@@ -169,6 +170,13 @@ class DatasetThreadStorage extends ThreadStorage {
     _initialSnapshotReady = false;
     _closed = true;
     await subscription?.cancel();
+    final refreshEntriesFuture = _refreshEntriesFuture;
+    _refreshEntriesFuture = null;
+    if (refreshEntriesFuture != null) {
+      try {
+        await refreshEntriesFuture;
+      } catch (_) {}
+    }
   }
 
   @override
@@ -271,7 +279,9 @@ class DatasetThreadStorage extends ThreadStorage {
         removed = _entriesByPath.remove(deletedPath) != null || removed;
       }
       if (rows.isEmpty && deletedPath == null) {
-        unawaited(_refreshEntries().catchError((_) {}));
+        final refreshEntriesFuture = _refreshEntries();
+        _refreshEntriesFuture = refreshEntriesFuture;
+        unawaited(refreshEntriesFuture.catchError((_) {}));
         return false;
       }
       if (removed || rows.isEmpty) {
@@ -303,6 +313,9 @@ class DatasetThreadStorage extends ThreadStorage {
       namespace: ref.namespace,
       select: const ['path', 'name', 'created_at', 'modified_at'],
     );
+    if (_closed) {
+      return;
+    }
     final nextEntries = <String, ThreadListEntry>{};
     for (final row in table.toRows()) {
       final entry = ThreadListEntry.fromDatasetRow(row);

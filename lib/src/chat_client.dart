@@ -4,45 +4,15 @@ import 'dart:typed_data';
 import 'package:meshagent/meshagent.dart';
 import 'package:uuid/uuid.dart';
 
-const String agentRoomMessageType = 'agent-message';
-const String agentTurnStartType = 'meshagent.agent.turn.start';
-const String agentTurnSteerType = 'meshagent.agent.turn.steer';
-const String agentTurnInterruptType = 'meshagent.agent.turn.interrupt';
-const String agentRealtimeAudioChunkType =
-    'meshagent.agent.realtime_audio.chunk';
-const String agentRealtimeAudioCommitType =
-    'meshagent.agent.realtime_audio.commit';
-const String agentThreadStartType = 'meshagent.agent.thread.start';
-const String agentThreadStartedType = 'meshagent.agent.thread.started';
-const String agentThreadStartRejectedType =
-    'meshagent.agent.thread.start.rejected';
-const String agentThreadOpenType = 'meshagent.agent.thread.open';
-const String agentThreadCloseType = 'meshagent.agent.thread.close';
-const String agentThreadDeleteType = 'meshagent.agent.thread.delete';
-const String agentThreadRenameType = 'meshagent.agent.thread.rename';
-const String agentTurnStartAcceptedType = 'meshagent.agent.turn.start.accepted';
-const String agentTurnStartRejectedType = 'meshagent.agent.turn.start.rejected';
-const String agentTurnSteerAcceptedType = 'meshagent.agent.turn.steer.accepted';
-const String agentTurnSteerRejectedType = 'meshagent.agent.turn.steer.rejected';
-const String agentTurnInterruptAcceptedType =
-    'meshagent.agent.turn.interrupt.accepted';
-const String agentTurnInterruptedType = 'meshagent.agent.turn.interrupted';
-const String agentTurnStartedType = 'meshagent.agent.turn.started';
-const String agentTurnSteeredType = 'meshagent.agent.turn.steered';
-const String agentTurnEndedType = 'meshagent.agent.turn.ended';
-const String agentThreadClearedType = 'meshagent.agent.thread.cleared';
-const String agentModelsRequestType = 'meshagent.agent.models.request';
-const String agentModelsResponseType = 'meshagent.agent.models.response';
-const String agentModelChangeType = 'meshagent.agent.model.change';
-const String agentModelChangedType = 'meshagent.agent.model.changed';
-
-typedef AgentPayload = Map<String, dynamic>;
+import 'agent_messages.dart';
 
 class AgentMessageEvent {
-  const AgentMessageEvent({required this.payload, this.attachment});
+  const AgentMessageEvent({required this.message, this.attachment});
 
-  final AgentPayload payload;
+  final AgentMessage message;
   final Uint8List? attachment;
+
+  AgentPayload get payload => message.toJson();
 }
 
 class PendingAgentInput {
@@ -60,7 +30,7 @@ class PendingAgentInput {
   final String messageId;
   final String messageType;
   final String threadPath;
-  final AgentPayload payload;
+  final AgentMessage payload;
   final DateTime createdAt;
   final bool awaitingAcceptance;
   final bool awaitingApplication;
@@ -99,8 +69,8 @@ class ChatThreadStartResult {
 abstract class BaseChatClient extends ChangeEmitter {
   final Map<String, ChatThreadSession> _sessionsByPath =
       <String, ChatThreadSession>{};
-  final Map<String, Completer<AgentPayload>> _pendingStartRequests =
-      <String, Completer<AgentPayload>>{};
+  final Map<String, Completer<AgentMessage>> _pendingStartRequests =
+      <String, Completer<AgentMessage>>{};
   final StreamController<AgentMessageEvent> _events =
       StreamController<AgentMessageEvent>.broadcast();
 
@@ -140,39 +110,46 @@ abstract class BaseChatClient extends ChangeEmitter {
     String? realtimeProtocol,
   }) async {
     final messageId = const Uuid().v4();
-    final payload = <String, dynamic>{
-      'type': agentThreadStartType,
-      'message_id': messageId,
-      'content': agentInputContent(text: message, attachments: attachments),
-      if (provider != null && provider.trim().isNotEmpty)
-        'provider': provider.trim(),
-      if (model != null && model.trim().isNotEmpty) 'model': model.trim(),
-      if (voice != null && voice.trim().isNotEmpty) 'voice': voice.trim(),
-      if (outputModalities != null && outputModalities.isNotEmpty)
-        'output_modalities': outputModalities,
-      if (realtimeProtocol != null && realtimeProtocol.trim().isNotEmpty)
-        'realtime_protocol': realtimeProtocol.trim(),
-    };
-    final completer = Completer<AgentPayload>();
+    final payload = StartThread(
+      messageId: messageId,
+      content: agentInputContent(text: message, attachments: attachments),
+      provider: provider != null && provider.trim().isNotEmpty
+          ? provider.trim()
+          : null,
+      model: model != null && model.trim().isNotEmpty ? model.trim() : null,
+      voice: voice != null && voice.trim().isNotEmpty ? voice.trim() : null,
+      outputModalities: outputModalities != null && outputModalities.isNotEmpty
+          ? outputModalities
+          : null,
+      realtimeProtocol:
+          realtimeProtocol != null && realtimeProtocol.trim().isNotEmpty
+          ? realtimeProtocol.trim()
+          : null,
+    );
+    final completer = Completer<AgentMessage>();
     _pendingStartRequests[messageId] = completer;
     try {
       await sendAgentMessage(payload);
       final response = await completer.future;
-      final threadPath = response['thread_id']?.toString().trim();
-      if (threadPath == null || threadPath.isEmpty) {
+      final threadPath = response is ThreadStarted
+          ? response.threadId.trim()
+          : response is AgentThreadMessage
+          ? response.threadId.trim()
+          : '';
+      if (threadPath.isEmpty) {
         throw StateError(
           'Agent did not return a thread_id for the new thread.',
         );
       }
       final session = openThread(threadPath);
-      session.addAgentMessage(AgentMessageEvent(payload: payload));
-      final realtimeConnection = response['realtime_connection'];
+      session.addAgentMessage(AgentMessageEvent(message: payload));
+      final realtimeConnection = response is ThreadStarted
+          ? response.realtimeConnection?.toJson()
+          : null;
       return ChatThreadStartResult(
         session: session,
         threadPath: threadPath,
-        realtimeConnection: realtimeConnection is Map
-            ? Map<String, dynamic>.from(realtimeConnection)
-            : null,
+        realtimeConnection: realtimeConnection,
       );
     } finally {
       _pendingStartRequests.remove(messageId);
@@ -180,33 +157,33 @@ abstract class BaseChatClient extends ChangeEmitter {
   }
 
   Future<void> sendAgentMessage(
-    AgentPayload payload, {
+    AgentMessage message, {
     Uint8List? attachment,
     bool ignoreOffline = false,
   });
 
-  void handleAgentMessage(AgentPayload payload, {Uint8List? attachment}) {
-    _events.add(AgentMessageEvent(payload: payload, attachment: attachment));
-    final type = payload['type'];
-    final sourceMessageId = payload['source_message_id']?.toString();
-    if ((type == agentThreadStartedType ||
-            type == agentThreadStartRejectedType) &&
+  void handleAgentMessage(AgentMessage message, {Uint8List? attachment}) {
+    _events.add(AgentMessageEvent(message: message, attachment: attachment));
+    final sourceMessageId = _sourceMessageId(message);
+    if ((message is ThreadStarted || message is ThreadStartRejected) &&
         sourceMessageId != null &&
         sourceMessageId.trim().isNotEmpty) {
       final pending = _pendingStartRequests[sourceMessageId.trim()];
       if (pending != null && !pending.isCompleted) {
-        pending.complete(payload);
+        pending.complete(message);
       }
     }
 
-    final threadPath = payload['thread_id']?.toString().trim();
+    final threadPath = message is AgentThreadMessage
+        ? message.threadId.trim()
+        : null;
     if (threadPath == null || threadPath.isEmpty) {
       notifyListeners();
       return;
     }
     final session = _sessionsByPath[threadPath];
     session?.addAgentMessage(
-      AgentMessageEvent(payload: payload, attachment: attachment),
+      AgentMessageEvent(message: message, attachment: attachment),
     );
     notifyListeners();
   }
@@ -295,20 +272,18 @@ class MessagingChatClient extends BaseChatClient {
 
   @override
   Future<void> sendAgentMessage(
-    AgentPayload payload, {
+    AgentMessage message, {
     Uint8List? attachment,
     bool ignoreOffline = false,
   }) async {
     await start();
     final participant =
         agentParticipant() ??
-        await waitForAgentParticipant(
-          waitKey: payload['message_id']?.toString(),
-        );
+        await waitForAgentParticipant(waitKey: message.messageId);
     await room.messaging.sendMessage(
       to: participant,
       type: agentRoomMessageType,
-      message: payload,
+      message: message.toJson(),
       attachment: attachment,
       ignoreOffline: ignoreOffline,
     );
@@ -339,10 +314,13 @@ class MessagingChatClient extends BaseChatClient {
     final message = event.message.message;
     final rawPayload = message['type'] is String ? message : message['payload'];
     if (rawPayload is Map<String, dynamic>) {
-      handleAgentMessage(rawPayload, attachment: event.message.attachment);
+      handleAgentMessage(
+        AgentMessage.fromJson(rawPayload),
+        attachment: event.message.attachment,
+      );
     } else if (rawPayload is Map) {
       handleAgentMessage(
-        Map<String, dynamic>.from(rawPayload),
+        AgentMessage.fromJson(Map<String, dynamic>.from(rawPayload)),
         attachment: event.message.attachment,
       );
     }
@@ -376,10 +354,10 @@ class ChatThreadSession extends ChangeEmitter {
     }
     _open = true;
     notifyListeners();
-    await _client.sendAgentMessage({
-      'type': agentThreadOpenType,
-      'thread_id': threadPath,
-    }, ignoreOffline: true);
+    await _client.sendAgentMessage(
+      OpenThread(threadId: threadPath),
+      ignoreOffline: true,
+    );
     await requestModels(ignoreOffline: true);
   }
 
@@ -388,17 +366,17 @@ class ChatThreadSession extends ChangeEmitter {
       return;
     }
     _markClosed();
-    await _client.sendAgentMessage({
-      'type': agentThreadCloseType,
-      'thread_id': threadPath,
-    }, ignoreOffline: true);
+    await _client.sendAgentMessage(
+      CloseThread(threadId: threadPath),
+      ignoreOffline: true,
+    );
   }
 
   Future<void> requestModels({bool ignoreOffline = false}) {
-    return _client.sendAgentMessage({
-      'type': agentModelsRequestType,
-      'message_id': const Uuid().v4(),
-    }, ignoreOffline: ignoreOffline);
+    return _client.sendAgentMessage(
+      ModelsRequest(messageId: const Uuid().v4()),
+      ignoreOffline: ignoreOffline,
+    );
   }
 
   Future<void> changeModel({
@@ -406,22 +384,21 @@ class ChatThreadSession extends ChangeEmitter {
     required String model,
     String? voice,
   }) {
-    return _client.sendAgentMessage({
-      'type': agentModelChangeType,
-      'thread_id': threadPath,
-      'message_id': const Uuid().v4(),
-      'provider': provider,
-      'model': model,
-      if (voice != null && voice.trim().isNotEmpty) 'voice': voice.trim(),
-    });
+    return _client.sendAgentMessage(
+      ChangeModel(
+        threadId: threadPath,
+        messageId: const Uuid().v4(),
+        provider: provider,
+        model: model,
+        voice: voice != null && voice.trim().isNotEmpty ? voice.trim() : null,
+      ),
+    );
   }
 
   Future<void> interruptTurn(String turnId) {
-    return _client.sendAgentMessage({
-      'type': agentTurnInterruptType,
-      'thread_id': threadPath,
-      'turn_id': turnId,
-    });
+    return _client.sendAgentMessage(
+      TurnInterrupt(threadId: threadPath, turnId: turnId),
+    );
   }
 
   Future<String> sendText({
@@ -439,28 +416,43 @@ class ChatThreadSession extends ChangeEmitter {
     final resolvedMessageId = messageId == null || messageId.trim().isEmpty
         ? const Uuid().v4()
         : messageId.trim();
-    final payload = <String, dynamic>{
-      'type': steer ? agentTurnSteerType : agentTurnStartType,
-      'thread_id': threadPath,
-      'message_id': resolvedMessageId,
-      'content': agentInputContent(text: text, attachments: attachments),
-      if (senderName != null && senderName.trim().isNotEmpty)
-        'sender_name': senderName.trim(),
-      if (steer && turnId != null && turnId.trim().isNotEmpty)
-        'turn_id': turnId.trim(),
-      if (!steer && provider != null && provider.trim().isNotEmpty)
-        'provider': provider.trim(),
-      if (!steer && model != null && model.trim().isNotEmpty)
-        'model': model.trim(),
-      if (!steer && voice != null && voice.trim().isNotEmpty)
-        'voice': voice.trim(),
-      if (!steer && outputModalities != null && outputModalities.isNotEmpty)
-        'output_modalities': outputModalities,
-    };
+    final payload = steer
+        ? TurnSteer(
+            threadId: threadPath,
+            messageId: resolvedMessageId,
+            senderName: senderName != null && senderName.trim().isNotEmpty
+                ? senderName.trim()
+                : null,
+            turnId: turnId != null && turnId.trim().isNotEmpty
+                ? turnId.trim()
+                : resolvedMessageId,
+            content: agentInputContent(text: text, attachments: attachments),
+          )
+        : TurnStart(
+            threadId: threadPath,
+            messageId: resolvedMessageId,
+            senderName: senderName != null && senderName.trim().isNotEmpty
+                ? senderName.trim()
+                : null,
+            content: agentInputContent(text: text, attachments: attachments),
+            provider: provider != null && provider.trim().isNotEmpty
+                ? provider.trim()
+                : null,
+            model: model != null && model.trim().isNotEmpty
+                ? model.trim()
+                : null,
+            voice: voice != null && voice.trim().isNotEmpty
+                ? voice.trim()
+                : null,
+            outputModalities:
+                outputModalities != null && outputModalities.isNotEmpty
+                ? outputModalities
+                : null,
+          );
     _markPending(
       PendingAgentInput(
         messageId: resolvedMessageId,
-        messageType: steer ? agentTurnSteerType : agentTurnStartType,
+        messageType: payload.type,
         threadPath: threadPath,
         payload: payload,
         createdAt: DateTime.now().toUtc(),
@@ -468,7 +460,7 @@ class ChatThreadSession extends ChangeEmitter {
         awaitingApplication: true,
       ),
     );
-    addAgentMessage(AgentMessageEvent(payload: payload));
+    addAgentMessage(AgentMessageEvent(message: payload));
     try {
       await _client.sendAgentMessage(payload);
       return resolvedMessageId;
@@ -483,12 +475,14 @@ class ChatThreadSession extends ChangeEmitter {
     required Uint8List chunk,
     required Map<String, dynamic> format,
   }) async {
-    await _client.sendAgentMessage({
-      'type': agentRealtimeAudioChunkType,
-      'thread_id': threadPath,
-      'message_id': const Uuid().v4(),
-      'format': format,
-    }, attachment: chunk);
+    await _client.sendAgentMessage(
+      AgentRealtimeAudioChunk(
+        threadId: threadPath,
+        messageId: const Uuid().v4(),
+        format: AgentAudioFormat.fromJson(format),
+      ),
+      attachment: chunk,
+    );
   }
 
   Future<String> commitRealtimeAudio({
@@ -499,57 +493,57 @@ class ChatThreadSession extends ChangeEmitter {
     List<String>? outputModalities,
   }) async {
     final messageId = const Uuid().v4();
-    await _client.sendAgentMessage({
-      'type': agentRealtimeAudioCommitType,
-      'thread_id': threadPath,
-      'message_id': messageId,
-      'turn_id': turnId,
-    });
-    await _client.sendAgentMessage({
-      'type': agentTurnStartType,
-      'thread_id': threadPath,
-      'message_id': const Uuid().v4(),
-      'turn_id': turnId,
-      if (provider != null && provider.trim().isNotEmpty)
-        'provider': provider.trim(),
-      if (model != null && model.trim().isNotEmpty) 'model': model.trim(),
-      if (voice != null && voice.trim().isNotEmpty) 'voice': voice.trim(),
-      if (outputModalities != null && outputModalities.isNotEmpty)
-        'output_modalities': outputModalities,
-    });
+    await _client.sendAgentMessage(
+      AgentRealtimeAudioCommit(
+        threadId: threadPath,
+        messageId: messageId,
+        turnId: turnId,
+      ),
+    );
+    await _client.sendAgentMessage(
+      TurnStart(
+        threadId: threadPath,
+        messageId: const Uuid().v4(),
+        turnId: turnId,
+        provider: provider != null && provider.trim().isNotEmpty
+            ? provider.trim()
+            : null,
+        model: model != null && model.trim().isNotEmpty ? model.trim() : null,
+        voice: voice != null && voice.trim().isNotEmpty ? voice.trim() : null,
+        outputModalities:
+            outputModalities != null && outputModalities.isNotEmpty
+            ? outputModalities
+            : null,
+      ),
+    );
     return messageId;
   }
 
   Future<void> deleteThread(String threadPath) {
-    return _client.sendAgentMessage({
-      'type': agentThreadDeleteType,
-      'thread_id': threadPath,
-    });
+    return _client.sendAgentMessage(DeleteThread(threadId: threadPath));
   }
 
   Future<void> renameThread(String threadPath, String name) {
-    return _client.sendAgentMessage({
-      'type': agentThreadRenameType,
-      'thread_id': threadPath,
-      'name': name,
-    });
+    return _client.sendAgentMessage(
+      RenameThread(threadId: threadPath, name: name),
+    );
   }
 
   void addAgentMessage(AgentMessageEvent event) {
     _messages.add(event);
-    final payload = event.payload;
-    final type = payload['type'];
-    final messageId = payload['message_id']?.toString();
-    final sourceMessageId = payload['source_message_id']?.toString();
+    final message = event.message;
+    final type = message.type;
+    final messageId = message.messageId;
+    final sourceMessageId = _sourceMessageId(message);
     if (type == agentTurnStartType || type == agentTurnSteerType) {
-      final normalizedMessageId = messageId?.trim();
-      if (normalizedMessageId != null && normalizedMessageId.isNotEmpty) {
+      final normalizedMessageId = messageId.trim();
+      if (normalizedMessageId.isNotEmpty) {
         _markPending(
           PendingAgentInput(
             messageId: normalizedMessageId,
-            messageType: type.toString(),
+            messageType: type,
             threadPath: threadPath,
-            payload: payload,
+            payload: message,
             createdAt: DateTime.now().toUtc(),
             awaitingAcceptance: true,
             awaitingApplication: true,
@@ -607,20 +601,27 @@ class ChatThreadSession extends ChangeEmitter {
   }
 }
 
-List<Map<String, dynamic>> agentInputContent({
-  required String text,
-  required List<String> attachments,
-}) {
-  final content = <Map<String, dynamic>>[];
-  final trimmed = text.trim();
-  if (trimmed.isNotEmpty) {
-    content.add({'type': 'text', 'text': text});
+String? _sourceMessageId(AgentMessage message) {
+  if (message is ThreadStarted) {
+    return message.sourceMessageId;
   }
-  for (final attachment in attachments) {
-    final normalized = attachment.trim();
-    if (normalized.isNotEmpty) {
-      content.add({'type': 'file', 'url': normalized});
-    }
+  if (message is ThreadStartRejected) {
+    return message.sourceMessageId;
   }
-  return content;
+  if (message is ThreadCleared) {
+    return message.sourceMessageId;
+  }
+  if (message is TurnStartAccepted) {
+    return message.sourceMessageId;
+  }
+  if (message is TurnStartRejected) {
+    return message.sourceMessageId;
+  }
+  if (message is TurnInterruptAccepted) {
+    return message.sourceMessageId;
+  }
+  if (message is TurnSteerRejected) {
+    return message.sourceMessageId;
+  }
+  return null;
 }

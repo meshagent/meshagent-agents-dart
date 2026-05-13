@@ -320,7 +320,11 @@ void main() {
           'type': agentThreadStartedType,
           'source_message_id': startMessage.payload['message_id'],
           'thread_id': 'dataset://agents/${harness.agentName}/threads/new',
-          'realtime_connection': {'type': 'webrtc', 'token': 'token-1'},
+          'realtime_connection': {
+            'protocol': 'webrtc',
+            'url': 'wss://example.invalid/session',
+            'headers': {'authorization': 'Bearer token-1'},
+          },
         }),
       );
 
@@ -329,7 +333,11 @@ void main() {
         result.threadPath,
         'dataset://agents/${harness.agentName}/threads/new',
       );
-      expect(result.realtimeConnection, {'type': 'webrtc', 'token': 'token-1'});
+      expect(result.realtimeConnection, {
+        'protocol': 'webrtc',
+        'url': 'wss://example.invalid/session',
+        'headers': {'authorization': 'Bearer token-1'},
+      });
       expect(
         result.session.messages.single.payload['type'],
         agentThreadStartType,
@@ -451,7 +459,7 @@ void main() {
         agentRealtimeAudioChunkType,
       );
       expect(chunk.payload['format'], {
-        'encoding': 'pcm16',
+        'type': 'audio/pcm',
         'sample_rate': 24000,
       });
       expect(chunk.attachment, [1, 2, 3]);

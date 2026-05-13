@@ -4,16 +4,16 @@ import 'package:meshagent_agents/meshagent_agents.dart';
 import 'package:test/test.dart';
 
 class _FakeChatClient extends BaseChatClient {
-  final sent = <AgentPayload>[];
+  final sent = <AgentMessage>[];
   final attachments = <Uint8List?>[];
 
   @override
   Future<void> sendAgentMessage(
-    AgentPayload payload, {
+    AgentMessage message, {
     Uint8List? attachment,
     bool ignoreOffline = false,
   }) async {
-    sent.add(payload);
+    sent.add(message);
     attachments.add(attachment);
   }
 }
@@ -27,27 +27,30 @@ void main() {
       await session.sendText(text: 'hello', attachments: const []);
 
       final turnStart = client.sent.lastWhere(
-        (payload) => payload['type'] == agentTurnStartType,
+        (message) => message.type == agentTurnStartType,
       );
-      final messageId = turnStart['message_id'] as String;
+      final messageId = turnStart.messageId;
       expect(session.pendingInputs, hasLength(1));
       expect(session.pendingInputs.single.awaitingAcceptance, isTrue);
 
-      client.handleAgentMessage({
-        'type': agentTurnStartAcceptedType,
-        'thread_id': session.threadPath,
-        'source_message_id': messageId,
-        'content': agentInputContent(text: 'hello', attachments: const []),
-      });
+      client.handleAgentMessage(
+        TurnStartAccepted(
+          threadId: session.threadPath,
+          sourceMessageId: messageId,
+          content: agentInputContent(text: 'hello', attachments: const []),
+        ),
+      );
 
       expect(session.pendingInputs.single.awaitingAcceptance, isFalse);
       expect(session.pendingInputs.single.awaitingApplication, isTrue);
 
-      client.handleAgentMessage({
-        'type': agentTurnStartedType,
-        'thread_id': session.threadPath,
-        'source_message_id': messageId,
-      });
+      client.handleAgentMessage(
+        TurnStarted(
+          threadId: session.threadPath,
+          turnId: 'turn-1',
+          sourceMessageId: messageId,
+        ),
+      );
 
       expect(session.pendingInputs, isEmpty);
     },
@@ -65,19 +68,27 @@ void main() {
         realtimeProtocol: 'webrtc',
       );
 
-      final sourceMessageId = client.sent.single['message_id'] as String;
-      client.handleAgentMessage({
-        'type': agentThreadStartedType,
-        'source_message_id': sourceMessageId,
-        'thread_id': 'dataset://threads/created',
-        'realtime_connection': {'type': 'webrtc', 'token': 'token'},
-      });
+      final sourceMessageId = client.sent.single.messageId;
+      client.handleAgentMessage(
+        ThreadStarted(
+          sourceMessageId: sourceMessageId,
+          threadId: 'dataset://threads/created',
+          realtimeConnection: const AgentRealtimeConnectionInfo(
+            protocol: 'webrtc',
+            url: 'wss://example.invalid',
+          ),
+        ),
+      );
 
       final result = await startFuture;
       expect(result.threadPath, 'dataset://threads/created');
       expect(result.session.threadPath, 'dataset://threads/created');
       expect(result.session.isOpen, isTrue);
-      expect(result.realtimeConnection, {'type': 'webrtc', 'token': 'token'});
+      expect(result.realtimeConnection, {
+        'protocol': 'webrtc',
+        'url': 'wss://example.invalid',
+        'headers': <String, String>{},
+      });
     },
   );
 }
