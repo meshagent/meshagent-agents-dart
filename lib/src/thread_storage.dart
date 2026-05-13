@@ -160,6 +160,9 @@ class DatasetThreadStorageRepository extends ThreadStorageRepository {
             }
           },
           onError: (Object error, StackTrace stackTrace) {
+            if (_closed) {
+              return;
+            }
             if (!ready.isCompleted) {
               ready.completeError(error, stackTrace);
             } else {
@@ -167,6 +170,9 @@ class DatasetThreadStorageRepository extends ThreadStorageRepository {
             }
           },
           onDone: () {
+            if (_closed) {
+              return;
+            }
             if (!ready.isCompleted) {
               ready.completeError(
                 StateError(
