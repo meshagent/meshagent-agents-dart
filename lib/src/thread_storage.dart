@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:meshagent/meshagent.dart';
 
+import 'agent_messages.dart';
+
 const String defaultUntitledThreadName = 'New Chat';
 
 final RegExp _uuidPattern = RegExp(
@@ -51,7 +53,21 @@ class ThreadListEntry {
   }
 }
 
-abstract class ThreadStorage extends ChangeEmitter {
+abstract class ThreadStorage {
+  String get path;
+
+  Future<void> start();
+
+  Future<void> stop();
+
+  Future<void> waitUntilReady();
+
+  List<AgentThreadMessage> agentMessages();
+
+  void pushMessage({required AgentThreadMessage message, Participant? sender});
+}
+
+abstract class ThreadStorageRepository extends ChangeEmitter {
   Future<void> open();
 
   Future<void> close();
@@ -107,8 +123,8 @@ class DatasetThreadListRef {
   }
 }
 
-class DatasetThreadStorage extends ThreadStorage {
-  DatasetThreadStorage({required this.room, required String path})
+class DatasetThreadStorageRepository extends ThreadStorageRepository {
+  DatasetThreadStorageRepository({required this.room, required String path})
     : path = path.trim(),
       ref = DatasetThreadListRef.parse(path.trim());
 
@@ -358,6 +374,10 @@ class DatasetThreadStorage extends ThreadStorage {
       ],
     );
   }
+}
+
+class DatasetThreadStorage extends DatasetThreadStorageRepository {
+  DatasetThreadStorage({required super.room, required super.path});
 }
 
 String defaultThreadDisplayNameFromPath(String path) {

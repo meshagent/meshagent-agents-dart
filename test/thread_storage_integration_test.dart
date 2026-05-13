@@ -60,50 +60,54 @@ Future<void> _waitUntil(
 }
 
 void main() {
-  group('DatasetThreadStorage integration', skip: _serverSkipReason, () {
-    test('lists, watches, renames, and deletes dataset threads', () async {
-      final suffix = const Uuid().v4();
-      final room = _newRoomClient(
-        roomName: 'dart-thread-storage-$suffix',
-        participantName: 'tester',
-      );
-      await room.start();
+  group(
+    'DatasetThreadStorageRepository integration',
+    skip: _serverSkipReason,
+    () {
+      test('lists, watches, renames, and deletes dataset threads', () async {
+        final suffix = const Uuid().v4();
+        final room = _newRoomClient(
+          roomName: 'dart-thread-storage-$suffix',
+          participantName: 'tester',
+        );
+        await room.start();
 
-      final path = 'dataset://dart-agents/$suffix/thread_list';
-      final watcher = DatasetThreadStorage(room: room, path: path);
-      final writer = DatasetThreadStorage(room: room, path: path);
-      addTearDown(() async {
-        await watcher.close();
-        await writer.close();
-        room.dispose();
+        final path = 'dataset://dart-agents/$suffix/thread_list';
+        final watcher = DatasetThreadStorageRepository(room: room, path: path);
+        final writer = DatasetThreadStorageRepository(room: room, path: path);
+        addTearDown(() async {
+          await watcher.close();
+          await writer.close();
+          room.dispose();
+        });
+        await watcher.open();
+        await writer.open();
+
+        final entry = ThreadListEntry(
+          path: 'dataset://dart-agents/$suffix/threads/one',
+          name: 'First thread',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          modifiedAt: '2026-01-01T00:00:00.000Z',
+        );
+        await writer.addOrUpdateThread(entry);
+        await _waitUntil(
+          () => watcher.entries().any(
+            (item) => item.path == entry.path && item.name == 'First thread',
+          ),
+        );
+
+        await writer.renameThread(entry.path, 'Renamed thread');
+        await _waitUntil(
+          () => watcher.entries().any(
+            (item) => item.path == entry.path && item.name == 'Renamed thread',
+          ),
+        );
+
+        await watcher.deleteThread(entry.path);
+        await _waitUntil(
+          () => watcher.entries().every((item) => item.path != entry.path),
+        );
       });
-      await watcher.open();
-      await writer.open();
-
-      final entry = ThreadListEntry(
-        path: 'dataset://dart-agents/$suffix/threads/one',
-        name: 'First thread',
-        createdAt: '2026-01-01T00:00:00.000Z',
-        modifiedAt: '2026-01-01T00:00:00.000Z',
-      );
-      await writer.addOrUpdateThread(entry);
-      await _waitUntil(
-        () => watcher.entries().any(
-          (item) => item.path == entry.path && item.name == 'First thread',
-        ),
-      );
-
-      await writer.renameThread(entry.path, 'Renamed thread');
-      await _waitUntil(
-        () => watcher.entries().any(
-          (item) => item.path == entry.path && item.name == 'Renamed thread',
-        ),
-      );
-
-      await watcher.deleteThread(entry.path);
-      await _waitUntil(
-        () => watcher.entries().every((item) => item.path != entry.path),
-      );
-    });
-  });
+    },
+  );
 }
