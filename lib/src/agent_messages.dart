@@ -15,10 +15,15 @@ const String agentRealtimeAudioCommitType =
     'meshagent.agent.realtime_audio.commit';
 const String agentThreadStartType = 'meshagent.agent.thread.start';
 const String agentThreadStartedType = 'meshagent.agent.thread.started';
+const String agentThreadLoadedType = 'meshagent.agent.thread.loaded';
 const String agentThreadStartRejectedType =
     'meshagent.agent.thread.start.rejected';
 const String agentThreadOpenType = 'meshagent.agent.thread.open';
 const String agentThreadCloseType = 'meshagent.agent.thread.close';
+const String agentParticipantConnectType =
+    'meshagent.agent.participant.connect';
+const String agentParticipantDisconnectType =
+    'meshagent.agent.participant.disconnect';
 const String agentThreadDeleteType = 'meshagent.agent.thread.delete';
 const String agentThreadRenameType = 'meshagent.agent.thread.rename';
 const String agentCapabilitiesRequestType =
@@ -64,7 +69,9 @@ const String agentToolCallLogDeltaType = 'meshagent.agent.tool_call.log_delta';
 const String agentToolCallEndedType = 'meshagent.agent.tool_call.ended';
 const String agentToolCallApprovalRequestedType =
     'meshagent.agent.tool_call.approval_requested';
+const String agentSecretRequestedType = 'meshagent.agent.secret.requested';
 const String agentThreadStatusType = 'meshagent.agent.thread.status';
+const String agentConnectionStatusType = 'meshagent.agent.connection.status';
 const String agentThreadEventType = 'meshagent.agent.thread.event';
 const String agentImageGenerationStartedType =
     'meshagent.agent.image_generation.started';
@@ -98,6 +105,7 @@ const String agentContextCompactedType = 'meshagent.agent.context.compacted';
 const String agentUsageUpdatedType = 'meshagent.agent.usage.updated';
 const String agentToolApproveType = 'meshagent.agent.tool_call.approve';
 const String agentToolRejectType = 'meshagent.agent.tool_call.reject';
+const String agentSecretResponseType = 'meshagent.agent.secret.response';
 
 typedef AgentPayload = Map<String, dynamic>;
 
@@ -141,6 +149,10 @@ abstract class AgentMessage {
         return OpenThread.fromJson(json);
       case agentThreadCloseType:
         return CloseThread.fromJson(json);
+      case agentParticipantConnectType:
+        return ParticipantConnect.fromJson(json);
+      case agentParticipantDisconnectType:
+        return ParticipantDisconnect.fromJson(json);
       case agentThreadDeleteType:
         return DeleteThread.fromJson(json);
       case agentThreadRenameType:
@@ -179,6 +191,8 @@ abstract class AgentMessage {
         return TurnEnded.fromJson(json);
       case agentThreadStartedType:
         return ThreadStarted.fromJson(json);
+      case agentThreadLoadedType:
+        return ThreadLoaded.fromJson(json);
       case agentThreadStartRejectedType:
         return ThreadStartRejected.fromJson(json);
       case agentReasoningContentStartedType:
@@ -213,8 +227,12 @@ abstract class AgentMessage {
         return AgentToolCallEnded.fromJson(json);
       case agentToolCallApprovalRequestedType:
         return AgentToolCallApprovalRequested.fromJson(json);
+      case agentSecretRequestedType:
+        return AgentSecretRequested.fromJson(json);
       case agentThreadStatusType:
         return AgentThreadStatus.fromJson(json);
+      case agentConnectionStatusType:
+        return AgentConnectionStatus.fromJson(json);
       case agentThreadEventType:
         return AgentThreadEvent.fromJson(json);
       case agentImageGenerationStartedType:
@@ -253,6 +271,8 @@ abstract class AgentMessage {
         return ApproveAgentToolCall.fromJson(json);
       case agentToolRejectType:
         return RejectAgentToolCall.fromJson(json);
+      case agentSecretResponseType:
+        return AgentSecretResponse.fromJson(json);
     }
     throw ArgumentError.value(
       type,
@@ -606,14 +626,31 @@ class ClearThread extends AgentThreadMessage {
 }
 
 class OpenThread extends AgentThreadMessage {
-  OpenThread({required super.threadId, super.messageId, super.senderName})
-    : super(type: agentThreadOpenType);
+  OpenThread({
+    required super.threadId,
+    super.messageId,
+    super.senderName,
+    this.load,
+    this.sinceTurn,
+  }) : super(type: agentThreadOpenType);
+
+  final bool? load;
+  final String? sinceTurn;
 
   factory OpenThread.fromJson(Map<String, dynamic> json) => OpenThread(
     threadId: _requiredString(json, 'thread_id'),
     messageId: _stringOrNull(json['message_id']),
     senderName: _stringOrNull(json['sender_name']),
+    load: _boolOrNull(json['load']),
+    sinceTurn: _stringOrNull(json['since_turn']),
   );
+
+  @override
+  Map<String, dynamic> toJson() => super.toJson()
+    ..addAll(<String, dynamic>{
+      if (load != null) 'load': load,
+      if (sinceTurn != null) 'since_turn': sinceTurn,
+    });
 }
 
 class CloseThread extends AgentThreadMessage {
@@ -625,6 +662,50 @@ class CloseThread extends AgentThreadMessage {
     messageId: _stringOrNull(json['message_id']),
     senderName: _stringOrNull(json['sender_name']),
   );
+}
+
+class ParticipantConnect extends AgentMessage {
+  ParticipantConnect({
+    required this.participantId,
+    super.messageId,
+    super.senderName,
+  }) : super(type: agentParticipantConnectType);
+
+  final String participantId;
+
+  factory ParticipantConnect.fromJson(Map<String, dynamic> json) =>
+      ParticipantConnect(
+        participantId: _requiredString(json, 'participant_id'),
+        messageId: _stringOrNull(json['message_id']),
+        senderName: _stringOrNull(json['sender_name']),
+      );
+
+  @override
+  Map<String, dynamic> toJson() =>
+      super.toJson()
+        ..addAll(<String, dynamic>{'participant_id': participantId});
+}
+
+class ParticipantDisconnect extends AgentMessage {
+  ParticipantDisconnect({
+    required this.participantId,
+    super.messageId,
+    super.senderName,
+  }) : super(type: agentParticipantDisconnectType);
+
+  final String participantId;
+
+  factory ParticipantDisconnect.fromJson(Map<String, dynamic> json) =>
+      ParticipantDisconnect(
+        participantId: _requiredString(json, 'participant_id'),
+        messageId: _stringOrNull(json['message_id']),
+        senderName: _stringOrNull(json['sender_name']),
+      );
+
+  @override
+  Map<String, dynamic> toJson() =>
+      super.toJson()
+        ..addAll(<String, dynamic>{'participant_id': participantId});
 }
 
 class DeleteThread extends AgentThreadMessage {
@@ -808,6 +889,8 @@ class AgentModelInfo {
     this.outputFormat,
     this.turnDetection,
     this.realtimeProtocols = const <String>[],
+    this.supportsAttachments = false,
+    this.accepts = const <String>[],
     this.active = false,
   });
 
@@ -823,6 +906,8 @@ class AgentModelInfo {
   final AgentAudioFormat? outputFormat;
   final String? turnDetection;
   final List<String> realtimeProtocols;
+  final bool supportsAttachments;
+  final List<String> accepts;
   final bool active;
 
   factory AgentModelInfo.fromJson(Map<String, dynamic> json) => AgentModelInfo(
@@ -841,6 +926,8 @@ class AgentModelInfo {
     outputFormat: _audioFormatOrNull(json['output_format']),
     turnDetection: _stringOrNull(json['turn_detection']),
     realtimeProtocols: _stringList(json['realtime_protocols']),
+    supportsAttachments: json['supports_attachments'] == true,
+    accepts: _stringList(json['accepts']),
     active: json['active'] == true,
   );
 
@@ -857,6 +944,8 @@ class AgentModelInfo {
     if (outputFormat != null) 'output_format': outputFormat!.toJson(),
     if (turnDetection != null) 'turn_detection': turnDetection,
     'realtime_protocols': realtimeProtocols,
+    'supports_attachments': supportsAttachments,
+    'accepts': accepts,
     'active': active,
   };
 }
@@ -976,6 +1065,8 @@ class AgentModelChanged extends AgentThreadMessage {
     this.turnDetection,
     this.outputModalities = const <String>['text'],
     this.realtimeProtocols = const <String>[],
+    this.supportsAttachments = false,
+    this.accepts = const <String>[],
   }) : super(type: agentModelChangedType);
 
   final String? sourceMessageId;
@@ -987,6 +1078,8 @@ class AgentModelChanged extends AgentThreadMessage {
   final String? turnDetection;
   final List<String> outputModalities;
   final List<String> realtimeProtocols;
+  final bool supportsAttachments;
+  final List<String> accepts;
 
   factory AgentModelChanged.fromJson(Map<String, dynamic> json) =>
       AgentModelChanged(
@@ -1005,6 +1098,8 @@ class AgentModelChanged extends AgentThreadMessage {
           fallback: const <String>['text'],
         ),
         realtimeProtocols: _stringList(json['realtime_protocols']),
+        supportsAttachments: json['supports_attachments'] == true,
+        accepts: _stringList(json['accepts']),
       );
 
   @override
@@ -1019,6 +1114,8 @@ class AgentModelChanged extends AgentThreadMessage {
       if (turnDetection != null) 'turn_detection': turnDetection,
       'output_modalities': outputModalities,
       'realtime_protocols': realtimeProtocols,
+      'supports_attachments': supportsAttachments,
+      'accepts': accepts,
     });
 }
 
@@ -1313,6 +1410,34 @@ class ThreadStarted extends AgentMessage {
       'thread_id': threadId,
       if (realtimeConnection != null)
         'realtime_connection': realtimeConnection!.toJson(),
+    });
+}
+
+class ThreadLoaded extends AgentThreadMessage {
+  ThreadLoaded({
+    required super.threadId,
+    super.messageId,
+    super.senderName,
+    this.sourceMessageId,
+    this.sinceTurn,
+  }) : super(type: agentThreadLoadedType);
+
+  final String? sourceMessageId;
+  final String? sinceTurn;
+
+  factory ThreadLoaded.fromJson(Map<String, dynamic> json) => ThreadLoaded(
+    messageId: _stringOrNull(json['message_id']),
+    senderName: _stringOrNull(json['sender_name']),
+    threadId: _requiredString(json, 'thread_id'),
+    sourceMessageId: _stringOrNull(json['source_message_id']),
+    sinceTurn: _stringOrNull(json['since_turn']),
+  );
+
+  @override
+  Map<String, dynamic> toJson() => super.toJson()
+    ..addAll(<String, dynamic>{
+      if (sourceMessageId != null) 'source_message_id': sourceMessageId,
+      if (sinceTurn != null) 'since_turn': sinceTurn,
     });
 }
 
@@ -1993,6 +2118,55 @@ class AgentToolCallApprovalRequested extends AgentToolCallPending {
   String get type => agentToolCallApprovalRequestedType;
 }
 
+class AgentSecretRequested extends AgentLLMMessage {
+  AgentSecretRequested({
+    required super.threadId,
+    required this.turnId,
+    required this.requestId,
+    required this.secretName,
+    super.messageId,
+    super.senderName,
+    super.provider,
+    super.model,
+    this.prompt,
+    this.oauth,
+    this.challenge,
+  }) : super(type: agentSecretRequestedType);
+
+  final String turnId;
+  final String requestId;
+  final String secretName;
+  final String? prompt;
+  final Map<String, dynamic>? oauth;
+  final String? challenge;
+
+  factory AgentSecretRequested.fromJson(Map<String, dynamic> json) =>
+      AgentSecretRequested(
+        threadId: _requiredString(json, 'thread_id'),
+        messageId: _stringOrNull(json['message_id']),
+        senderName: _stringOrNull(json['sender_name']),
+        provider: _stringOrNull(json['provider']),
+        model: _stringOrNull(json['model']),
+        turnId: _requiredString(json, 'turn_id'),
+        requestId: _requiredString(json, 'request_id'),
+        secretName: _requiredString(json, 'secret_name'),
+        prompt: _stringOrNull(json['prompt']),
+        oauth: _dynamicMapOrNull(json['oauth']),
+        challenge: _stringOrNull(json['challenge']),
+      );
+
+  @override
+  Map<String, dynamic> toJson() => super.toJson()
+    ..addAll(<String, dynamic>{
+      'turn_id': turnId,
+      'request_id': requestId,
+      'secret_name': secretName,
+      if (prompt != null) 'prompt': prompt,
+      if (oauth != null) 'oauth': oauth,
+      if (challenge != null) 'challenge': challenge,
+    });
+}
+
 class AgentThreadStatus extends AgentThreadMessage {
   AgentThreadStatus({
     required super.threadId,
@@ -2043,6 +2217,41 @@ class AgentThreadStatus extends AgentThreadMessage {
       if (totalBytes != null) 'total_bytes': totalBytes,
       if (linesAdded != null) 'lines_added': linesAdded,
       if (linesRemoved != null) 'lines_removed': linesRemoved,
+    });
+}
+
+class AgentConnectionStatus extends AgentMessage {
+  AgentConnectionStatus({
+    required this.status,
+    super.messageId,
+    super.senderName,
+    this.message,
+    this.reason,
+    this.retryInSeconds,
+  }) : super(type: agentConnectionStatusType);
+
+  final String status;
+  final String? message;
+  final String? reason;
+  final double? retryInSeconds;
+
+  factory AgentConnectionStatus.fromJson(Map<String, dynamic> json) =>
+      AgentConnectionStatus(
+        messageId: _stringOrNull(json['message_id']),
+        senderName: _stringOrNull(json['sender_name']),
+        status: _requiredString(json, 'status'),
+        message: _stringOrNull(json['message']),
+        reason: _stringOrNull(json['reason']),
+        retryInSeconds: _doubleOrNull(json['retry_in_seconds']),
+      );
+
+  @override
+  Map<String, dynamic> toJson() => super.toJson()
+    ..addAll(<String, dynamic>{
+      'status': status,
+      if (message != null) 'message': message,
+      if (reason != null) 'reason': reason,
+      if (retryInSeconds != null) 'retry_in_seconds': retryInSeconds,
     });
 }
 
@@ -2897,6 +3106,51 @@ class RejectAgentToolCall extends ApproveAgentToolCall {
   String get type => agentToolRejectType;
 }
 
+class AgentSecretResponse extends AgentThreadMessage {
+  AgentSecretResponse({
+    required super.threadId,
+    required this.turnId,
+    required this.requestId,
+    super.messageId,
+    super.senderName,
+    this.value,
+    this.authorizationCode,
+    this.redirectUri,
+    this.error,
+  }) : super(type: agentSecretResponseType);
+
+  final String turnId;
+  final String requestId;
+  final String? value;
+  final String? authorizationCode;
+  final String? redirectUri;
+  final String? error;
+
+  factory AgentSecretResponse.fromJson(Map<String, dynamic> json) =>
+      AgentSecretResponse(
+        threadId: _requiredString(json, 'thread_id'),
+        messageId: _stringOrNull(json['message_id']),
+        senderName: _stringOrNull(json['sender_name']),
+        turnId: _requiredString(json, 'turn_id'),
+        requestId: _requiredString(json, 'request_id'),
+        value: _stringOrNull(json['value']),
+        authorizationCode: _stringOrNull(json['authorization_code']),
+        redirectUri: _stringOrNull(json['redirect_uri']),
+        error: _stringOrNull(json['error']),
+      );
+
+  @override
+  Map<String, dynamic> toJson() => super.toJson()
+    ..addAll(<String, dynamic>{
+      'turn_id': turnId,
+      'request_id': requestId,
+      if (value != null) 'value': value,
+      if (authorizationCode != null) 'authorization_code': authorizationCode,
+      if (redirectUri != null) 'redirect_uri': redirectUri,
+      if (error != null) 'error': error,
+    });
+}
+
 List<AgentInputContent> agentInputContent({
   required String text,
   required List<String> attachments,
@@ -2941,6 +3195,8 @@ Map<String, dynamic> _requiredMap(Map<String, dynamic> json, String key) {
 
 String? _stringOrNull(Object? value) => value is String ? value : null;
 
+bool? _boolOrNull(Object? value) => value is bool ? value : null;
+
 int? _intOrNull(Object? value) {
   if (value is int) {
     return value;
@@ -2953,6 +3209,8 @@ int? _intOrNull(Object? value) {
   }
   return null;
 }
+
+double? _doubleOrNull(Object? value) => _numOrNull(value)?.toDouble();
 
 num? _numOrNull(Object? value) {
   if (value is num) {

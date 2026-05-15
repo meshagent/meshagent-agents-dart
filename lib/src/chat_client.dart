@@ -2,7 +2,10 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:meshagent/meshagent.dart';
+import 'package:msgpack_dart/msgpack_dart.dart' as msgpack;
 import 'package:uuid/uuid.dart';
+import 'package:web_socket_channel/status.dart' as websocket_status;
+import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'agent_messages.dart';
 
@@ -73,11 +76,20 @@ abstract class BaseChatClient extends ChangeEmitter {
       <String, Completer<AgentMessage>>{};
   final StreamController<AgentMessageEvent> _events =
       StreamController<AgentMessageEvent>.broadcast();
+  AgentConnectionStatus? _connectionStatus;
 
   Stream<AgentMessageEvent> get events => _events.stream;
 
+  AgentConnectionStatus? get connectionStatus => _connectionStatus;
+
   Iterable<ChatThreadSession> get sessions =>
       List<ChatThreadSession>.unmodifiable(_sessionsByPath.values);
+
+  Future<void> start() async {}
+
+  Future<void> stop() async {}
+
+  RemoteParticipant? agentParticipant() => null;
 
   ChatThreadSession openThread(String threadPath) {
     final normalized = threadPath.trim();
@@ -103,16 +115,22 @@ abstract class BaseChatClient extends ChangeEmitter {
   Future<ChatThreadStartResult> startThread({
     required String message,
     required List<String> attachments,
+    String? name,
     String? provider,
     String? model,
     String? voice,
     List<String>? outputModalities,
     String? realtimeProtocol,
+    String? senderName,
+    bool omitContent = false,
   }) async {
     final messageId = const Uuid().v4();
     final payload = StartThread(
       messageId: messageId,
-      content: agentInputContent(text: message, attachments: attachments),
+      content: omitContent
+          ? null
+          : agentInputContent(text: message, attachments: attachments),
+      name: name != null && name.trim().isNotEmpty ? name.trim() : null,
       provider: provider != null && provider.trim().isNotEmpty
           ? provider.trim()
           : null,
@@ -124,6 +142,9 @@ abstract class BaseChatClient extends ChangeEmitter {
       realtimeProtocol:
           realtimeProtocol != null && realtimeProtocol.trim().isNotEmpty
           ? realtimeProtocol.trim()
+          : null,
+      senderName: senderName != null && senderName.trim().isNotEmpty
+          ? senderName.trim()
           : null,
     );
     final completer = Completer<AgentMessage>();
@@ -163,6 +184,16 @@ abstract class BaseChatClient extends ChangeEmitter {
   });
 
   void handleAgentMessage(AgentMessage message, {Uint8List? attachment}) {
+    if (message is AgentConnectionStatus) {
+      _connectionStatus = message;
+      for (final session in _sessionsByPath.values) {
+        if (session.isOpen) {
+          session.addAgentMessage(
+            AgentMessageEvent(message: message, attachment: attachment),
+          );
+        }
+      }
+    }
     _events.add(AgentMessageEvent(message: message, attachment: attachment));
     final sourceMessageId = _sourceMessageId(message);
     if ((message is ThreadStarted || message is ThreadStartRejected) &&
@@ -188,6 +219,30 @@ abstract class BaseChatClient extends ChangeEmitter {
     notifyListeners();
   }
 
+  void emitConnectionStatus({
+    required String status,
+    String? message,
+    String? reason,
+    Duration? retryDelay,
+  }) {
+    final event = AgentConnectionStatus(
+      status: status,
+      message: message,
+      reason: reason,
+      retryInSeconds: retryDelay == null
+          ? null
+          : retryDelay.inMilliseconds / Duration.millisecondsPerSecond,
+    );
+    _connectionStatus = event;
+    _events.add(AgentMessageEvent(message: event));
+    for (final session in _sessionsByPath.values) {
+      if (session.isOpen) {
+        session.addAgentMessage(AgentMessageEvent(message: event));
+      }
+    }
+    notifyListeners();
+  }
+
   void removeThreadSession(String threadPath) {
     final normalized = threadPath.trim();
     final removed = _sessionsByPath.remove(normalized);
@@ -210,7 +265,9 @@ class MessagingChatClient extends BaseChatClient {
   final Map<String, Completer<RemoteParticipant>> _pendingParticipantWaits =
       <String, Completer<RemoteParticipant>>{};
   bool _started = false;
+  String? _agentParticipantId;
 
+  @override
   Future<void> start() async {
     if (_started) {
       return;
@@ -220,6 +277,7 @@ class MessagingChatClient extends BaseChatClient {
     await room.messaging.enable();
   }
 
+  @override
   Future<void> stop() async {
     _started = false;
     await _roomSubscription?.cancel();
@@ -235,8 +293,17 @@ class MessagingChatClient extends BaseChatClient {
       }
     }
     _pendingParticipantWaits.clear();
+    if (_agentParticipantId != null) {
+      _agentParticipantId = null;
+      emitConnectionStatus(
+        status: 'disconnected',
+        message: 'Agent messaging disconnected',
+        reason: 'client_stopped',
+      );
+    }
   }
 
+  @override
   RemoteParticipant? agentParticipant() {
     final normalizedAgentName = agentName?.trim();
     for (final participant in room.messaging.remoteParticipants) {
@@ -291,6 +358,24 @@ class MessagingChatClient extends BaseChatClient {
 
   void _onMessagingChanged() {
     final participant = agentParticipant();
+    final participantId = participant?.id;
+    if (participantId != _agentParticipantId) {
+      if (participantId == null) {
+        if (_agentParticipantId != null) {
+          emitConnectionStatus(
+            status: 'disconnected',
+            message: 'Agent messaging disconnected',
+            reason: 'participant_disconnected',
+          );
+        }
+      } else {
+        emitConnectionStatus(
+          status: 'connected',
+          message: 'Agent messaging connected',
+        );
+      }
+      _agentParticipantId = participantId;
+    }
     if (participant != null) {
       for (final wait in _pendingParticipantWaits.values) {
         if (!wait.isCompleted) {
@@ -302,6 +387,25 @@ class MessagingChatClient extends BaseChatClient {
   }
 
   void _onRoomEvent(RoomEvent event) {
+    if (event is RoomStatusEvent) {
+      final status = event.status.trim().toLowerCase();
+      if (status == 'connected' || status == 'reconnected') {
+        emitConnectionStatus(
+          status: status,
+          message: event.message.trim().isNotEmpty
+              ? event.message
+              : 'Room connection restored',
+        );
+      } else if (status == 'disconnected' || status == 'reconnecting') {
+        emitConnectionStatus(
+          status: status,
+          message: event.message.trim().isNotEmpty
+              ? event.message
+              : 'Room connection lost',
+        );
+      }
+      return;
+    }
     if (event is! RoomMessageEvent ||
         event.message.type != agentRoomMessageType) {
       return;
@@ -327,6 +431,314 @@ class MessagingChatClient extends BaseChatClient {
   }
 }
 
+class WebSocketChatClient extends BaseChatClient {
+  WebSocketChatClient({
+    required this.url,
+    required this.token,
+    this.protocols = const <String>['meshagent-msgpack'],
+    this.reconnect = true,
+    this.reconnectInitialDelay = const Duration(seconds: 1),
+    this.reconnectMaxDelay = const Duration(seconds: 10),
+  });
+
+  final Uri url;
+  final String token;
+  final List<String> protocols;
+  final bool reconnect;
+  final Duration reconnectInitialDelay;
+  final Duration reconnectMaxDelay;
+  WebSocketChannel? _webSocket;
+  StreamSubscription<dynamic>? _subscription;
+  Object? _receiveError;
+  int? _closeCode;
+  String? _closeReason;
+  bool _started = false;
+  bool _stopping = false;
+  bool _connecting = false;
+  int _reconnectAttempts = 0;
+  Timer? _reconnectTimer;
+
+  bool get isConnected => _webSocket != null;
+
+  @override
+  Future<void> start() async {
+    _started = true;
+    _stopping = false;
+    if (_webSocket != null || _connecting) {
+      return;
+    }
+    await _connect(isReconnect: false);
+  }
+
+  Future<void> _connect({required bool isReconnect}) async {
+    if (_webSocket != null || _connecting || !_started || _stopping) {
+      return;
+    }
+    _connecting = true;
+    final webSocket = WebSocketChannel.connect(
+      url,
+      protocols: _resolvedProtocols(),
+    );
+    _webSocket = webSocket;
+    try {
+      await webSocket.ready;
+    } catch (error) {
+      _webSocket = null;
+      _receiveError = error;
+      _connecting = false;
+      if (isReconnect && reconnect && !_stopping) {
+        _scheduleReconnect(reason: error.toString());
+        return;
+      }
+      emitConnectionStatus(
+        status: 'disconnected',
+        message: 'Chat websocket connection failed',
+        reason: error.toString(),
+      );
+      rethrow;
+    }
+    _subscription = webSocket.stream.listen(
+      _onData,
+      onError: (Object error) {
+        _receiveError = error;
+        _handleSocketDisconnected(
+          webSocket,
+          reason: error.toString(),
+          wasError: true,
+        );
+      },
+      onDone: () {
+        _handleSocketDisconnected(
+          webSocket,
+          reason: _socketCloseReason(webSocket),
+          wasError: false,
+        );
+      },
+    );
+    _connecting = false;
+    _receiveError = null;
+    _closeCode = null;
+    _closeReason = null;
+    final status = isReconnect ? 'reconnected' : 'connected';
+    emitConnectionStatus(
+      status: status,
+      message: isReconnect
+          ? 'Chat websocket reconnected'
+          : 'Chat websocket connected',
+    );
+    if (isReconnect) {
+      await _reopenOpenSessions();
+    }
+    _reconnectAttempts = 0;
+    notifyListeners();
+  }
+
+  @override
+  Future<void> stop() async {
+    _started = false;
+    _stopping = true;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    final webSocket = _webSocket;
+    _webSocket = null;
+    await _subscription?.cancel();
+    _subscription = null;
+    await webSocket?.sink.close(websocket_status.normalClosure);
+    emitConnectionStatus(
+      status: 'disconnected',
+      message: 'Chat websocket disconnected',
+      reason: 'client_stopped',
+    );
+    _stopping = false;
+    notifyListeners();
+  }
+
+  @override
+  Future<void> sendAgentMessage(
+    AgentMessage message, {
+    Uint8List? attachment,
+    bool ignoreOffline = false,
+  }) async {
+    if (attachment != null) {
+      throw UnsupportedError(
+        'WebSocketChatClient does not support binary attachments yet.',
+      );
+    }
+    final webSocket = _webSocket;
+    if (webSocket == null) {
+      if (ignoreOffline) {
+        return;
+      }
+      throw StateError(_closedMessage());
+    }
+    webSocket.sink.add(msgpack.serialize(message.toJson()));
+  }
+
+  void _handleSocketDisconnected(
+    WebSocketChannel webSocket, {
+    required String reason,
+    required bool wasError,
+  }) {
+    if (!identical(_webSocket, webSocket)) {
+      return;
+    }
+    _closeCode = webSocket.closeCode;
+    _closeReason = webSocket.closeReason;
+    _webSocket = null;
+    _subscription = null;
+    if (_stopping || !_started) {
+      notifyListeners();
+      return;
+    }
+    if (reconnect) {
+      _scheduleReconnect(reason: reason);
+    } else {
+      emitConnectionStatus(
+        status: 'disconnected',
+        message: 'Chat websocket disconnected',
+        reason: reason,
+      );
+    }
+    notifyListeners();
+  }
+
+  void _scheduleReconnect({String? reason}) {
+    if (_reconnectTimer != null || _stopping || !_started) {
+      return;
+    }
+    final delay = _nextReconnectDelay();
+    emitConnectionStatus(
+      status: 'reconnecting',
+      message: 'Chat websocket disconnected; reconnecting',
+      reason: reason,
+      retryDelay: delay,
+    );
+    _reconnectTimer = Timer(delay, () {
+      _reconnectTimer = null;
+      unawaited(_connect(isReconnect: true));
+    });
+  }
+
+  Duration _nextReconnectDelay() {
+    final initialMs = reconnectInitialDelay.inMilliseconds <= 0
+        ? 1
+        : reconnectInitialDelay.inMilliseconds;
+    final maxMs = reconnectMaxDelay.inMilliseconds <= 0
+        ? initialMs
+        : reconnectMaxDelay.inMilliseconds;
+    final factor = 1 << (_reconnectAttempts > 6 ? 6 : _reconnectAttempts);
+    _reconnectAttempts += 1;
+    final millis = initialMs * factor;
+    return Duration(milliseconds: millis > maxMs ? maxMs : millis);
+  }
+
+  Future<void> _reopenOpenSessions() async {
+    for (final session in sessions) {
+      if (!session.isOpen) {
+        continue;
+      }
+      await sendAgentMessage(
+        OpenThread(
+          threadId: session.threadPath,
+          load: true,
+          sinceTurn: session.lastCompletedTurnId,
+        ),
+        ignoreOffline: true,
+      );
+      await session.requestModels(ignoreOffline: true);
+    }
+  }
+
+  List<String> _resolvedProtocols() {
+    final resolved = <String>[];
+    for (final protocol in protocols) {
+      final normalized = protocol.trim();
+      if (normalized.isNotEmpty && !resolved.contains(normalized)) {
+        resolved.add(normalized);
+      }
+    }
+    final normalizedToken = token.trim();
+    if (normalizedToken.isNotEmpty) {
+      resolved.add('bearer.$normalizedToken');
+    }
+    return resolved;
+  }
+
+  String _closedMessage() {
+    final receiveError = _receiveError;
+    if (receiveError != null) {
+      return 'chat websocket is closed: $receiveError';
+    }
+    final closeCode = _closeCode;
+    if (closeCode != null) {
+      return 'chat websocket is closed (code=$closeCode)';
+    }
+    final closeReason = _closeReason;
+    if (closeReason != null && closeReason.trim().isNotEmpty) {
+      return 'chat websocket is closed: $closeReason';
+    }
+    return 'chat websocket is closed';
+  }
+
+  String _socketCloseReason(WebSocketChannel webSocket) {
+    final closeCode = webSocket.closeCode;
+    final closeReason = webSocket.closeReason;
+    if (closeCode != null && closeReason != null && closeReason.isNotEmpty) {
+      return 'code=$closeCode: $closeReason';
+    }
+    if (closeCode != null) {
+      return 'code=$closeCode';
+    }
+    if (closeReason != null && closeReason.isNotEmpty) {
+      return closeReason;
+    }
+    return 'websocket closed';
+  }
+
+  void _onData(dynamic data) {
+    try {
+      final Uint8List bytes;
+      if (data is Uint8List) {
+        bytes = data;
+      } else if (data is List<int>) {
+        bytes = Uint8List.fromList(data);
+      } else {
+        return;
+      }
+      final decoded = msgpack.deserialize(bytes);
+      if (decoded is! Map) {
+        throw StateError('chat websocket received a non-object message');
+      }
+      handleAgentMessage(AgentMessage.fromJson(_stringKeyMap(decoded)));
+    } catch (error) {
+      _receiveError = error;
+      emitConnectionStatus(
+        status: 'disconnected',
+        message: 'Chat websocket message could not be decoded',
+        reason: error.toString(),
+      );
+      unawaited(_webSocket?.sink.close(websocket_status.unsupportedData));
+    }
+  }
+
+  Map<String, dynamic> _stringKeyMap(Map<dynamic, dynamic> value) {
+    return value.map(
+      (key, nestedValue) =>
+          MapEntry(key.toString(), _normalizeMsgpackValue(nestedValue)),
+    );
+  }
+
+  dynamic _normalizeMsgpackValue(dynamic value) {
+    if (value is Map) {
+      return _stringKeyMap(value);
+    }
+    if (value is List) {
+      return value.map(_normalizeMsgpackValue).toList();
+    }
+    return value;
+  }
+}
+
 class ChatThreadSession extends ChangeEmitter {
   ChatThreadSession._({
     required BaseChatClient client,
@@ -339,6 +751,7 @@ class ChatThreadSession extends ChangeEmitter {
   final Map<String, PendingAgentInput> _pendingInputs =
       <String, PendingAgentInput>{};
   bool _open = false;
+  String? _lastCompletedTurnId;
 
   List<AgentMessageEvent> get messages =>
       List<AgentMessageEvent>.unmodifiable(_messages);
@@ -347,6 +760,8 @@ class ChatThreadSession extends ChangeEmitter {
       List<PendingAgentInput>.unmodifiable(_pendingInputs.values);
 
   bool get isOpen => _open;
+
+  String? get lastCompletedTurnId => _lastCompletedTurnId;
 
   Future<void> open() async {
     if (_open) {
@@ -564,6 +979,9 @@ class ChatThreadSession extends ChangeEmitter {
       _pendingInputs.remove(sourceMessageId);
     } else if (type == agentTurnEndedType || type == agentThreadClearedType) {
       _pendingInputs.clear();
+      if (message is TurnEnded && message.turnId.trim().isNotEmpty) {
+        _lastCompletedTurnId = message.turnId.trim();
+      }
     }
     notifyListeners();
   }
