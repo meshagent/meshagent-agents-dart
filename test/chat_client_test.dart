@@ -71,31 +71,150 @@ void main() {
     },
   );
 
-  test('openThread can request replay for an already open session', () async {
+  test(
+    'openThread reuses already open sessions without replay by default',
+    () async {
+      final client = _FakeChatClient();
+      final session = client.openThread('dataset://threads/example');
+
+      await _waitFor(
+        () => client.sent.any((message) => message is ModelsRequest),
+      );
+      client.sent.clear();
+      session.addAgentMessage(
+        AgentMessageEvent(
+          message: TurnEnded(threadId: session.threadPath, turnId: 'turn-1'),
+        ),
+      );
+
+      final reopened = client.openThread('dataset://threads/example');
+      expect(reopened, same(session));
+      await Future<void>.delayed(Duration.zero);
+      expect(client.sent.whereType<OpenThread>(), isEmpty);
+      expect(client.sent.whereType<ModelsRequest>(), isEmpty);
+    },
+  );
+
+  test(
+    'openThread can explicitly request replay for an already open session',
+    () async {
+      final client = _FakeChatClient();
+      final session = client.openThread('dataset://threads/example');
+
+      await _waitFor(
+        () => client.sent.any((message) => message is ModelsRequest),
+      );
+      client.sent.clear();
+      session.addAgentMessage(
+        AgentMessageEvent(
+          message: TurnEnded(threadId: session.threadPath, turnId: 'turn-1'),
+        ),
+      );
+
+      final reopened = client.openThread(
+        'dataset://threads/example',
+        reloadIfOpen: true,
+      );
+      expect(reopened, same(session));
+      await _waitFor(
+        () => client.sent.whereType<OpenThread>().any(
+          (message) =>
+              message.threadId == session.threadPath &&
+              message.load == true &&
+              message.sinceTurn == null,
+        ),
+      );
+      expect(client.sent.whereType<ModelsRequest>(), isNotEmpty);
+    },
+  );
+
+  test('thread session reports loading until replay completes', () async {
     final client = _FakeChatClient();
     final session = client.openThread('dataset://threads/example');
+    final firstOpen = client.sent.whereType<OpenThread>().single;
 
-    await _waitFor(
-      () => client.sent.any((message) => message is ModelsRequest),
+    expect(session.isLoading, isTrue);
+    expect(session.loadState.phase, ChatThreadSessionLoadPhase.loading);
+    expect(session.loadState.requestMessageId, firstOpen.messageId);
+    expect(session.loadState.sinceTurn, isNull);
+    client.handleAgentMessage(
+      ThreadLoaded(
+        threadId: session.threadPath,
+        sourceMessageId: firstOpen.messageId,
+      ),
     );
+    expect(session.isLoading, isFalse);
+    expect(session.loadState.phase, ChatThreadSessionLoadPhase.loaded);
+    expect(session.loadState.requestMessageId, firstOpen.messageId);
+
     client.sent.clear();
-    session.addAgentMessage(
-      AgentMessageEvent(
-        message: TurnEnded(threadId: session.threadPath, turnId: 'turn-1'),
+    client.openThread('dataset://threads/example', reloadIfOpen: true);
+    final secondOpen = client.sent.whereType<OpenThread>().single;
+    expect(session.isLoading, isTrue);
+    expect(session.loadState.phase, ChatThreadSessionLoadPhase.loading);
+    expect(session.loadState.requestMessageId, secondOpen.messageId);
+    client.handleAgentMessage(
+      ThreadLoaded(
+        threadId: session.threadPath,
+        sourceMessageId: secondOpen.messageId,
+      ),
+    );
+    expect(session.isLoading, isFalse);
+    expect(session.loadState.phase, ChatThreadSessionLoadPhase.loaded);
+    expect(session.loadState.requestMessageId, secondOpen.messageId);
+  });
+
+  test(
+    'thread session clears loading when replay completion arrives',
+    () async {
+      final client = _FakeChatClient();
+      final session = client.openThread('dataset://threads/example');
+
+      client.sent.clear();
+      client.openThread('dataset://threads/example', reloadIfOpen: true);
+
+      expect(session.isLoading, isTrue);
+      client.handleAgentMessage(ThreadLoaded(threadId: session.threadPath));
+      expect(session.isLoading, isFalse);
+      expect(session.loadState.phase, ChatThreadSessionLoadPhase.loaded);
+    },
+  );
+
+  test('startThread opens the created thread without replay loading', () async {
+    final client = _FakeChatClient();
+    final startFuture = client.startThread(
+      messageId: 'client-message-1',
+      message: 'hello',
+      attachments: const <AgentFileContent>[],
+    );
+
+    client.handleAgentMessage(
+      ThreadStarted(
+        sourceMessageId: 'client-message-1',
+        threadId: 'dataset://threads/created',
       ),
     );
 
-    final reopened = client.openThread('dataset://threads/example');
-    expect(reopened, same(session));
+    final result = await startFuture;
     await _waitFor(
       () => client.sent.whereType<OpenThread>().any(
-        (message) =>
-            message.threadId == session.threadPath &&
-            message.load == true &&
-            message.sinceTurn == null,
+        (message) => message.threadId == result.threadPath,
       ),
     );
-    expect(client.sent.whereType<ModelsRequest>(), isNotEmpty);
+    final open = client.sent.whereType<OpenThread>().lastWhere(
+      (message) => message.threadId == result.threadPath,
+    );
+    expect(open.load, isFalse);
+    expect(result.session.isLoading, isFalse);
+
+    expect(client.openThread(result.threadPath), same(result.session));
+    await Future<void>.delayed(Duration.zero);
+    expect(
+      client.sent.whereType<OpenThread>().where(
+        (message) => message.threadId == result.threadPath,
+      ),
+      hasLength(1),
+    );
   });
 
   test(
@@ -475,6 +594,17 @@ void main() {
     expect(reopened, containsPair('thread_id', session.threadPath));
     expect(reopened, containsPair('load', true));
     expect(reopened, containsPair('since_turn', 'turn-1'));
+    expect(session.isLoading, isTrue);
+    expect(session.loadState.phase, ChatThreadSessionLoadPhase.loading);
+    expect(session.loadState.sinceTurn, 'turn-1');
+    client.handleAgentMessage(
+      ThreadLoaded(
+        threadId: session.threadPath,
+        sourceMessageId: reopened['message_id'] as String,
+      ),
+    );
+    expect(session.isLoading, isFalse);
+    expect(session.loadState.phase, ChatThreadSessionLoadPhase.loaded);
     await _waitFor(
       () => session.messages.any(
         (event) =>

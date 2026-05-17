@@ -57,6 +57,42 @@ class PendingAgentInput {
   }
 }
 
+enum ChatThreadSessionLoadPhase { idle, loading, loaded, failed }
+
+class ChatThreadSessionLoadState {
+  const ChatThreadSessionLoadState({
+    required this.phase,
+    this.startedAt,
+    this.completedAt,
+    this.requestMessageId,
+    this.sinceTurn,
+    this.error,
+    this.lastMessageType,
+    this.lastMessageAt,
+  });
+
+  const ChatThreadSessionLoadState.idle()
+    : phase = ChatThreadSessionLoadPhase.idle,
+      startedAt = null,
+      completedAt = null,
+      requestMessageId = null,
+      sinceTurn = null,
+      error = null,
+      lastMessageType = null,
+      lastMessageAt = null;
+
+  final ChatThreadSessionLoadPhase phase;
+  final DateTime? startedAt;
+  final DateTime? completedAt;
+  final String? requestMessageId;
+  final String? sinceTurn;
+  final String? error;
+  final String? lastMessageType;
+  final DateTime? lastMessageAt;
+
+  bool get isLoading => phase == ChatThreadSessionLoadPhase.loading;
+}
+
 class ChatThreadStartResult {
   const ChatThreadStartResult({
     required this.session,
@@ -102,6 +138,7 @@ abstract class BaseChatClient extends ChangeEmitter {
     String threadPath, {
     bool load = true,
     String? sinceTurn,
+    bool reloadIfOpen = false,
   }) {
     final normalized = threadPath.trim();
     if (normalized.isEmpty) {
@@ -113,7 +150,9 @@ abstract class BaseChatClient extends ChangeEmitter {
     }
     final existing = _sessionsByPath[normalized];
     if (existing != null) {
-      unawaited(existing.open(load: load, sinceTurn: sinceTurn));
+      if (!existing.isOpen || reloadIfOpen) {
+        unawaited(existing.open(load: load, sinceTurn: sinceTurn));
+      }
       return existing;
     }
     final created = ChatThreadSession._(client: this, threadPath: normalized);
@@ -176,7 +215,7 @@ abstract class BaseChatClient extends ChangeEmitter {
           'Agent did not return a thread_id for the new thread.',
         );
       }
-      final session = openThread(threadPath);
+      final session = openThread(threadPath, load: false);
       if (!omitContent) {
         session.addAgentMessage(
           AgentMessageEvent(
@@ -680,15 +719,7 @@ class WebSocketChatClient extends BaseChatClient {
       if (!session.isOpen) {
         continue;
       }
-      await sendAgentMessage(
-        OpenThread(
-          threadId: session.threadPath,
-          load: true,
-          sinceTurn: session.lastCompletedTurnId,
-        ),
-        ignoreOffline: true,
-      );
-      await session.requestModels(ignoreOffline: true);
+      await session.open(load: true, sinceTurn: session.lastCompletedTurnId);
     }
   }
 
@@ -794,7 +825,11 @@ class ChatThreadSession extends ChangeEmitter {
   final Map<String, PendingAgentInput> _pendingInputs =
       <String, PendingAgentInput>{};
   bool _open = false;
+  ChatThreadSessionLoadState _loadState =
+      const ChatThreadSessionLoadState.idle();
   String? _lastCompletedTurnId;
+  String? _lastAgentMessageType;
+  DateTime? _lastAgentMessageAt;
 
   List<AgentMessageEvent> get messages =>
       List<AgentMessageEvent>.unmodifiable(_messages);
@@ -804,30 +839,50 @@ class ChatThreadSession extends ChangeEmitter {
 
   bool get isOpen => _open;
 
+  ChatThreadSessionLoadState get loadState => _loadState;
+
+  bool get isLoading => _loadState.isLoading;
+
   String? get lastCompletedTurnId => _lastCompletedTurnId;
 
   Future<void> open({bool load = true, String? sinceTurn}) async {
     if (_open) {
       if (load) {
-        await _client.sendAgentMessage(
-          OpenThread(threadId: threadPath, load: true, sinceTurn: sinceTurn),
-          ignoreOffline: true,
+        final openThread = OpenThread(
+          threadId: threadPath,
+          load: true,
+          sinceTurn: sinceTurn,
         );
-        await requestModels(ignoreOffline: true);
+        _setLoadState(_loadingStateForOpen(openThread, sinceTurn: sinceTurn));
+        try {
+          await _client.sendAgentMessage(openThread, ignoreOffline: true);
+          await requestModels(ignoreOffline: true);
+        } catch (error) {
+          _setLoadState(_failedLoadState(error));
+          rethrow;
+        }
       }
       return;
     }
     _open = true;
-    notifyListeners();
-    await _client.sendAgentMessage(
-      OpenThread(
-        threadId: threadPath,
-        load: load,
-        sinceTurn: load ? sinceTurn : null,
-      ),
-      ignoreOffline: true,
+    final openThread = OpenThread(
+      threadId: threadPath,
+      load: load,
+      sinceTurn: load ? sinceTurn : null,
     );
-    await requestModels(ignoreOffline: true);
+    if (load) {
+      _setLoadState(_loadingStateForOpen(openThread, sinceTurn: sinceTurn));
+    }
+    if (!load) {
+      notifyListeners();
+    }
+    try {
+      await _client.sendAgentMessage(openThread, ignoreOffline: true);
+      await requestModels(ignoreOffline: true);
+    } catch (error) {
+      _setLoadState(_failedLoadState(error));
+      rethrow;
+    }
   }
 
   Future<void> close() async {
@@ -1002,6 +1057,8 @@ class ChatThreadSession extends ChangeEmitter {
     _messages.add(event);
     final message = event.message;
     final type = message.type;
+    _lastAgentMessageType = type;
+    _lastAgentMessageAt = DateTime.now().toUtc();
     final messageId = message.messageId;
     final sourceMessageId = _sourceMessageId(message);
     if (type == agentTurnStartType || type == agentTurnSteerType) {
@@ -1036,12 +1093,67 @@ class ChatThreadSession extends ChangeEmitter {
       if (message is TurnEnded && message.turnId.trim().isNotEmpty) {
         _lastCompletedTurnId = message.turnId.trim();
       }
+    } else if (type == agentThreadLoadedType) {
+      _setLoadState(
+        ChatThreadSessionLoadState(
+          phase: ChatThreadSessionLoadPhase.loaded,
+          startedAt: _loadState.startedAt,
+          completedAt: _lastAgentMessageAt,
+          requestMessageId: _loadState.requestMessageId,
+          sinceTurn: _loadState.sinceTurn,
+          lastMessageType: type,
+          lastMessageAt: _lastAgentMessageAt,
+        ),
+        notify: false,
+      );
     }
     notifyListeners();
   }
 
   void _markClosed({bool notify = true}) {
     _open = false;
+    _loadState = ChatThreadSessionLoadState(
+      phase: ChatThreadSessionLoadPhase.idle,
+      lastMessageType: _lastAgentMessageType,
+      lastMessageAt: _lastAgentMessageAt,
+    );
+    if (notify) {
+      notifyListeners();
+    }
+  }
+
+  ChatThreadSessionLoadState _loadingStateForOpen(
+    OpenThread request, {
+    required String? sinceTurn,
+  }) {
+    return ChatThreadSessionLoadState(
+      phase: ChatThreadSessionLoadPhase.loading,
+      startedAt: DateTime.now().toUtc(),
+      requestMessageId: request.messageId,
+      sinceTurn: sinceTurn,
+      lastMessageType: _lastAgentMessageType,
+      lastMessageAt: _lastAgentMessageAt,
+    );
+  }
+
+  ChatThreadSessionLoadState _failedLoadState(Object error) {
+    return ChatThreadSessionLoadState(
+      phase: ChatThreadSessionLoadPhase.failed,
+      startedAt: _loadState.startedAt,
+      completedAt: DateTime.now().toUtc(),
+      requestMessageId: _loadState.requestMessageId,
+      sinceTurn: _loadState.sinceTurn,
+      error: Error.safeToString(error),
+      lastMessageType: _lastAgentMessageType,
+      lastMessageAt: _lastAgentMessageAt,
+    );
+  }
+
+  void _setLoadState(
+    ChatThreadSessionLoadState loadState, {
+    bool notify = true,
+  }) {
+    _loadState = loadState;
     if (notify) {
       notifyListeners();
     }
