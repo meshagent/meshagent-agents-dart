@@ -7,8 +7,14 @@ import 'package:msgpack_dart/msgpack_dart.dart' as msgpack;
 import 'package:test/test.dart';
 
 class _FakeChatClient extends BaseChatClient {
+  _FakeChatClient({this.participantName});
+
+  final String? participantName;
   final sent = <AgentMessage>[];
   final attachments = <Uint8List?>[];
+
+  @override
+  String? localParticipantName() => participantName;
 
   @override
   Future<void> sendAgentMessage(
@@ -27,7 +33,10 @@ void main() {
     () async {
       final client = _FakeChatClient();
       final session = client.openThread('dataset://threads/example');
-      await session.sendText(text: 'hello', attachments: const []);
+      await session.sendText(
+        text: 'hello',
+        attachments: const <AgentFileContent>[],
+      );
 
       final turnStart = client.sent.lastWhere(
         (message) => message.type == agentTurnStartType,
@@ -40,7 +49,10 @@ void main() {
         TurnStartAccepted(
           threadId: session.threadPath,
           sourceMessageId: messageId,
-          content: agentInputContent(text: 'hello', attachments: const []),
+          content: agentInputContent(
+            text: 'hello',
+            attachments: const <AgentFileContent>[],
+          ),
         ),
       );
 
@@ -59,13 +71,131 @@ void main() {
     },
   );
 
+  test('openThread can request replay for an already open session', () async {
+    final client = _FakeChatClient();
+    final session = client.openThread('dataset://threads/example');
+
+    await _waitFor(
+      () => client.sent.any((message) => message is ModelsRequest),
+    );
+    client.sent.clear();
+    session.addAgentMessage(
+      AgentMessageEvent(
+        message: TurnEnded(threadId: session.threadPath, turnId: 'turn-1'),
+      ),
+    );
+
+    final reopened = client.openThread('dataset://threads/example');
+    expect(reopened, same(session));
+    await _waitFor(
+      () => client.sent.whereType<OpenThread>().any(
+        (message) =>
+            message.threadId == session.threadPath &&
+            message.load == true &&
+            message.sinceTurn == null,
+      ),
+    );
+    expect(client.sent.whereType<ModelsRequest>(), isNotEmpty);
+  });
+
+  test(
+    'startThread reuses caller message id and records a thread-scoped turn start',
+    () async {
+      final client = _FakeChatClient();
+      final startFuture = client.startThread(
+        messageId: 'client-message-1',
+        message: 'hello',
+        attachments: const <AgentFileContent>[],
+      );
+
+      final startThread = client.sent.whereType<StartThread>().single;
+      expect(startThread.messageId, 'client-message-1');
+
+      client.handleAgentMessage(
+        ThreadStarted(
+          sourceMessageId: 'client-message-1',
+          threadId: 'dataset://threads/created',
+        ),
+      );
+
+      final result = await startFuture;
+      expect(result.threadPath, 'dataset://threads/created');
+      final localTurnStart = result.session.messages
+          .map((event) => event.message)
+          .whereType<TurnStart>()
+          .single;
+      expect(localTurnStart.threadId, 'dataset://threads/created');
+      expect(localTurnStart.messageId, 'client-message-1');
+      expect(localTurnStart.content, isNotEmpty);
+    },
+  );
+
+  test(
+    'startThread fills sender name from local participant identity',
+    () async {
+      final client = _FakeChatClient(participantName: 'jesse.ezell@timu.com');
+      final startFuture = client.startThread(
+        messageId: 'client-message-1',
+        message: 'hello',
+        attachments: const <AgentFileContent>[],
+      );
+
+      final startThread = client.sent.whereType<StartThread>().single;
+      expect(startThread.senderName, 'jesse.ezell@timu.com');
+
+      client.handleAgentMessage(
+        ThreadStarted(
+          sourceMessageId: 'client-message-1',
+          threadId: 'dataset://threads/created',
+        ),
+      );
+
+      final result = await startFuture;
+      final localTurnStart = result.session.messages
+          .map((event) => event.message)
+          .whereType<TurnStart>()
+          .single;
+      expect(localTurnStart.senderName, 'jesse.ezell@timu.com');
+    },
+  );
+
+  test(
+    'startThread prefers explicit sender name over local participant identity',
+    () async {
+      final client = _FakeChatClient(participantName: 'local@example.com');
+      final startFuture = client.startThread(
+        messageId: 'client-message-1',
+        message: 'hello',
+        attachments: const <AgentFileContent>[],
+        senderName: 'explicit@example.com',
+      );
+
+      final startThread = client.sent.whereType<StartThread>().single;
+      expect(startThread.senderName, 'explicit@example.com');
+
+      client.handleAgentMessage(
+        ThreadStarted(
+          sourceMessageId: 'client-message-1',
+          threadId: 'dataset://threads/created',
+        ),
+      );
+
+      final result = await startFuture;
+      final localTurnStart = result.session.messages
+          .map((event) => event.message)
+          .whereType<TurnStart>()
+          .single;
+      expect(localTurnStart.senderName, 'explicit@example.com');
+    },
+  );
+
   test(
     'startThread returns realtime connection details and opens the returned thread',
     () async {
       final client = _FakeChatClient();
       final startFuture = client.startThread(
         message: 'hello',
-        attachments: const [],
+        attachments: const <AgentFileContent>[],
         provider: 'openai',
         model: 'gpt-realtime',
         realtimeProtocol: 'webrtc',
@@ -143,7 +273,7 @@ void main() {
       await client.start();
       final result = await client.startThread(
         message: 'hello websocket',
-        attachments: const [],
+        attachments: const <AgentFileContent>[],
       );
 
       expect(result.threadPath, 'dataset://threads/websocket-created');
@@ -245,7 +375,7 @@ void main() {
       await client.start();
       final result = await client.startThread(
         message: 'make an image',
-        attachments: const [],
+        attachments: const <AgentFileContent>[],
       );
       final session = result.session;
 

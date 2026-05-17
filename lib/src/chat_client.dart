@@ -91,7 +91,18 @@ abstract class BaseChatClient extends ChangeEmitter {
 
   RemoteParticipant? agentParticipant() => null;
 
-  ChatThreadSession openThread(String threadPath) {
+  String? localParticipantName() => null;
+
+  String? _cleanParticipantName(String? value) {
+    final trimmed = value?.trim();
+    return trimmed == null || trimmed.isEmpty ? null : trimmed;
+  }
+
+  ChatThreadSession openThread(
+    String threadPath, {
+    bool load = true,
+    String? sinceTurn,
+  }) {
     final normalized = threadPath.trim();
     if (normalized.isEmpty) {
       throw ArgumentError.value(
@@ -102,19 +113,20 @@ abstract class BaseChatClient extends ChangeEmitter {
     }
     final existing = _sessionsByPath[normalized];
     if (existing != null) {
-      unawaited(existing.open());
+      unawaited(existing.open(load: load, sinceTurn: sinceTurn));
       return existing;
     }
     final created = ChatThreadSession._(client: this, threadPath: normalized);
     _sessionsByPath[normalized] = created;
-    unawaited(created.open());
+    unawaited(created.open(load: load, sinceTurn: sinceTurn));
     notifyListeners();
     return created;
   }
 
   Future<ChatThreadStartResult> startThread({
+    String? messageId,
     required String message,
-    required List<String> attachments,
+    required List<AgentFileContent> attachments,
     String? name,
     String? provider,
     String? model,
@@ -124,9 +136,13 @@ abstract class BaseChatClient extends ChangeEmitter {
     String? senderName,
     bool omitContent = false,
   }) async {
-    final messageId = const Uuid().v4();
+    final resolvedMessageId = messageId == null || messageId.trim().isEmpty
+        ? const Uuid().v4()
+        : messageId.trim();
+    final resolvedSenderName =
+        _cleanParticipantName(senderName) ?? localParticipantName();
     final payload = StartThread(
-      messageId: messageId,
+      messageId: resolvedMessageId,
       content: omitContent
           ? null
           : agentInputContent(text: message, attachments: attachments),
@@ -143,12 +159,10 @@ abstract class BaseChatClient extends ChangeEmitter {
           realtimeProtocol != null && realtimeProtocol.trim().isNotEmpty
           ? realtimeProtocol.trim()
           : null,
-      senderName: senderName != null && senderName.trim().isNotEmpty
-          ? senderName.trim()
-          : null,
+      senderName: resolvedSenderName,
     );
     final completer = Completer<AgentMessage>();
-    _pendingStartRequests[messageId] = completer;
+    _pendingStartRequests[resolvedMessageId] = completer;
     try {
       await sendAgentMessage(payload);
       final response = await completer.future;
@@ -163,7 +177,25 @@ abstract class BaseChatClient extends ChangeEmitter {
         );
       }
       final session = openThread(threadPath);
-      session.addAgentMessage(AgentMessageEvent(message: payload));
+      if (!omitContent) {
+        session.addAgentMessage(
+          AgentMessageEvent(
+            message: TurnStart(
+              threadId: threadPath,
+              messageId: resolvedMessageId,
+              senderName: payload.senderName,
+              content: payload.content ?? const [],
+              provider: payload.provider,
+              model: payload.model,
+              voice: payload.voice,
+              outputModalities: payload.outputModalities,
+              instructions: payload.instructions,
+              toolkits: payload.toolkits,
+              toolChoice: payload.toolChoice,
+            ),
+          ),
+        );
+      }
       final realtimeConnection = response is ThreadStarted
           ? response.realtimeConnection?.toJson()
           : null;
@@ -173,7 +205,7 @@ abstract class BaseChatClient extends ChangeEmitter {
         realtimeConnection: realtimeConnection,
       );
     } finally {
-      _pendingStartRequests.remove(messageId);
+      _pendingStartRequests.remove(resolvedMessageId);
     }
   }
 
@@ -266,6 +298,12 @@ class MessagingChatClient extends BaseChatClient {
       <String, Completer<RemoteParticipant>>{};
   bool _started = false;
   String? _agentParticipantId;
+
+  @override
+  String? localParticipantName() {
+    final name = room.localParticipant?.getAttribute('name');
+    return name is String ? _cleanParticipantName(name) : null;
+  }
 
   @override
   Future<void> start() async {
@@ -435,6 +473,7 @@ class WebSocketChatClient extends BaseChatClient {
   WebSocketChatClient({
     required this.url,
     required this.token,
+    this.participantName,
     this.protocols = const <String>['meshagent-msgpack'],
     this.reconnect = true,
     this.reconnectInitialDelay = const Duration(seconds: 1),
@@ -443,6 +482,7 @@ class WebSocketChatClient extends BaseChatClient {
 
   final Uri url;
   final String token;
+  final String? participantName;
   final List<String> protocols;
   final bool reconnect;
   final Duration reconnectInitialDelay;
@@ -459,6 +499,9 @@ class WebSocketChatClient extends BaseChatClient {
   Timer? _reconnectTimer;
 
   bool get isConnected => _webSocket != null;
+
+  @override
+  String? localParticipantName() => _cleanParticipantName(participantName);
 
   @override
   Future<void> start() async {
@@ -763,14 +806,25 @@ class ChatThreadSession extends ChangeEmitter {
 
   String? get lastCompletedTurnId => _lastCompletedTurnId;
 
-  Future<void> open() async {
+  Future<void> open({bool load = true, String? sinceTurn}) async {
     if (_open) {
+      if (load) {
+        await _client.sendAgentMessage(
+          OpenThread(threadId: threadPath, load: true, sinceTurn: sinceTurn),
+          ignoreOffline: true,
+        );
+        await requestModels(ignoreOffline: true);
+      }
       return;
     }
     _open = true;
     notifyListeners();
     await _client.sendAgentMessage(
-      OpenThread(threadId: threadPath),
+      OpenThread(
+        threadId: threadPath,
+        load: load,
+        sinceTurn: load ? sinceTurn : null,
+      ),
       ignoreOffline: true,
     );
     await requestModels(ignoreOffline: true);
@@ -819,7 +873,7 @@ class ChatThreadSession extends ChangeEmitter {
   Future<String> sendText({
     String? messageId,
     required String text,
-    required List<String> attachments,
+    required List<AgentFileContent> attachments,
     bool steer = false,
     String? turnId,
     String? provider,

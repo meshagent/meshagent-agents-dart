@@ -255,7 +255,6 @@ void main() {
           {firstOpen.payload['thread_id'], secondOpen.payload['thread_id']},
           {'dataset://threads/first', 'dataset://threads/second'},
         );
-
         await harness.sendFromIntruder(
           _payload({
             'type': agentTurnEndedType,
@@ -264,7 +263,14 @@ void main() {
           }),
         );
         await Future<void>.delayed(const Duration(milliseconds: 100));
-        expect(first.messages, isEmpty);
+        expect(
+          first.messages.any(
+            (event) =>
+                event.message is TurnEnded &&
+                (event.message as TurnEnded).turnId == 'ignored',
+          ),
+          isFalse,
+        );
 
         await harness.sendFromAgent(
           _payload({
@@ -281,11 +287,21 @@ void main() {
           }),
         );
         await _waitUntil(
-          () => first.messages.isNotEmpty && second.messages.isNotEmpty,
+          () =>
+              first.messages.any((event) => event.message is TurnEnded) &&
+              second.messages.any((event) => event.message is TurnEnded),
         );
 
-        expect(first.messages.single.payload['turn_id'], 'turn-first');
-        expect(second.messages.single.payload['turn_id'], 'turn-second');
+        final firstTurnEnded = first.messages
+            .map((event) => event.message)
+            .whereType<TurnEnded>()
+            .single;
+        final secondTurnEnded = second.messages
+            .map((event) => event.message)
+            .whereType<TurnEnded>()
+            .single;
+        expect(firstTurnEnded.turnId, 'turn-first');
+        expect(secondTurnEnded.turnId, 'turn-second');
       },
     );
 
@@ -295,7 +311,9 @@ void main() {
 
       final startFuture = harness.client.startThread(
         message: 'hello there',
-        attachments: const ['dataset://files/a.txt'],
+        attachments: const <AgentFileContent>[
+          AgentFileContent(url: 'dataset://files/a.txt'),
+        ],
         provider: 'openai',
         model: 'gpt-5.5',
         outputModalities: const ['text'],
@@ -359,7 +377,7 @@ void main() {
         await session.sendText(
           messageId: 'message-1',
           text: 'queued prompt',
-          attachments: const [],
+          attachments: const <AgentFileContent>[],
           provider: 'openai',
           model: 'gpt-5.5',
           voice: 'alloy',

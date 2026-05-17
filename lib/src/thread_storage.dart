@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:meshagent/meshagent.dart';
 
 import 'agent_messages.dart';
+import 'chat_client.dart';
 
 const String defaultUntitledThreadName = 'New Chat';
 
@@ -378,6 +379,167 @@ class DatasetThreadStorageRepository extends ThreadStorageRepository {
               .toList(growable: false),
         ),
       ],
+    );
+  }
+}
+
+class AgentThreadStorageRepository extends ThreadStorageRepository {
+  AgentThreadStorageRepository({required this.chatClient, this.limit = 200});
+
+  final BaseChatClient chatClient;
+  final int limit;
+  final Map<String, ThreadListEntry> _entriesByPath =
+      <String, ThreadListEntry>{};
+  StreamSubscription<AgentMessageEvent>? _subscription;
+  Completer<void>? _pendingOpen;
+  String? _pendingListMessageId;
+  bool _closed = true;
+
+  @override
+  Future<void> open() async {
+    if (!_closed) {
+      return;
+    }
+    _closed = false;
+    _subscription = chatClient.events.listen(_handleEvent);
+    final ready = Completer<void>();
+    _pendingOpen = ready;
+    await _requestList();
+    await ready.future;
+  }
+
+  @override
+  Future<void> close() async {
+    _closed = true;
+    final subscription = _subscription;
+    _subscription = null;
+    _pendingListMessageId = null;
+    final pendingOpen = _pendingOpen;
+    _pendingOpen = null;
+    if (pendingOpen != null && !pendingOpen.isCompleted) {
+      pendingOpen.complete();
+    }
+    await subscription?.cancel();
+  }
+
+  @override
+  List<ThreadListEntry> entries() => _entriesByPath.values.toList();
+
+  @override
+  Future<void> addOrUpdateThread(ThreadListEntry entry) {
+    throw UnsupportedError(
+      'Agent thread storage cannot directly upsert thread entries.',
+    );
+  }
+
+  @override
+  Future<void> deleteThread(String threadPath) async {
+    final normalized = _normalizeThreadPath(threadPath);
+    await chatClient.sendAgentMessage(DeleteThread(threadId: normalized));
+    if (_entriesByPath.remove(normalized) != null) {
+      notifyListeners();
+    }
+    unawaited(_requestList());
+  }
+
+  @override
+  Future<void> renameThread(String threadPath, String name) async {
+    final normalized = _normalizeThreadPath(threadPath);
+    final trimmedName = name.trim();
+    if (trimmedName.isEmpty) {
+      throw ArgumentError.value(name, 'name', 'thread name cannot be empty');
+    }
+    await chatClient.sendAgentMessage(
+      RenameThread(threadId: normalized, name: trimmedName),
+    );
+    final existing = _entriesByPath[normalized];
+    if (existing != null) {
+      _entriesByPath[normalized] = existing.renamed(
+        trimmedName,
+        DateTime.now().toUtc().toIso8601String(),
+      );
+      notifyListeners();
+    }
+    unawaited(_requestList());
+  }
+
+  Future<void> _requestList() async {
+    if (_closed) {
+      return;
+    }
+    final request = ListThreads(limit: limit);
+    _pendingListMessageId = request.messageId;
+    await chatClient.sendAgentMessage(request, ignoreOffline: true);
+  }
+
+  void _handleEvent(AgentMessageEvent event) {
+    final message = event.message;
+    if (message is ThreadsListed) {
+      _handleThreadsListed(message);
+      return;
+    }
+    if (message is ThreadCreated) {
+      _upsertThread(message.thread);
+      return;
+    }
+    if (message is ThreadUpdated) {
+      _upsertThread(message.thread);
+      return;
+    }
+    if (message is ThreadDeleted) {
+      final normalized = _normalizeThreadPath(message.path);
+      if (_entriesByPath.remove(normalized) != null && !_closed) {
+        notifyListeners();
+      }
+    }
+  }
+
+  void _handleThreadsListed(ThreadsListed message) {
+    final nextEntries = <String, ThreadListEntry>{};
+    for (final thread in message.threads) {
+      final entry = _entryFromAgentThread(thread);
+      if (entry != null) {
+        nextEntries[entry.path] = entry;
+      }
+    }
+    _entriesByPath
+      ..clear()
+      ..addAll(nextEntries);
+    final pendingOpen = _pendingOpen;
+    if (pendingOpen != null &&
+        !pendingOpen.isCompleted &&
+        (_pendingListMessageId == null ||
+            message.sourceMessageId == _pendingListMessageId)) {
+      pendingOpen.complete();
+      _pendingOpen = null;
+    }
+    if (!_closed) {
+      notifyListeners();
+    }
+  }
+
+  void _upsertThread(AgentThreadListEntry thread) {
+    final entry = _entryFromAgentThread(thread);
+    if (entry == null) {
+      return;
+    }
+    _entriesByPath[entry.path] = entry;
+    if (!_closed) {
+      notifyListeners();
+    }
+  }
+
+  ThreadListEntry? _entryFromAgentThread(AgentThreadListEntry thread) {
+    final path = thread.path.trim();
+    if (path.isEmpty) {
+      return null;
+    }
+    final name = thread.name.trim();
+    return ThreadListEntry(
+      path: path,
+      name: name.isNotEmpty ? name : defaultThreadDisplayNameFromPath(path),
+      createdAt: thread.createdAt,
+      modifiedAt: thread.modifiedAt,
     );
   }
 }

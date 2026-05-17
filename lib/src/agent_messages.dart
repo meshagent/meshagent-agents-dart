@@ -26,6 +26,11 @@ const String agentParticipantDisconnectType =
     'meshagent.agent.participant.disconnect';
 const String agentThreadDeleteType = 'meshagent.agent.thread.delete';
 const String agentThreadRenameType = 'meshagent.agent.thread.rename';
+const String agentThreadListType = 'meshagent.agent.thread.list';
+const String agentThreadListedType = 'meshagent.agent.thread.listed';
+const String agentThreadCreatedType = 'meshagent.agent.thread.created';
+const String agentThreadUpdatedType = 'meshagent.agent.thread.updated';
+const String agentThreadDeletedType = 'meshagent.agent.thread.deleted';
 const String agentCapabilitiesRequestType =
     'meshagent.agent.capabilities_request';
 const String agentCapabilitiesResponseType =
@@ -157,6 +162,16 @@ abstract class AgentMessage {
         return DeleteThread.fromJson(json);
       case agentThreadRenameType:
         return RenameThread.fromJson(json);
+      case agentThreadListType:
+        return ListThreads.fromJson(json);
+      case agentThreadListedType:
+        return ThreadsListed.fromJson(json);
+      case agentThreadCreatedType:
+        return ThreadCreated.fromJson(json);
+      case agentThreadUpdatedType:
+        return ThreadUpdated.fromJson(json);
+      case agentThreadDeletedType:
+        return ThreadDeleted.fromJson(json);
       case agentCapabilitiesRequestType:
         return CapabilitiesRequest.fromJson(json);
       case agentCapabilitiesResponseType:
@@ -738,6 +753,155 @@ class RenameThread extends AgentThreadMessage {
 
   @override
   Map<String, dynamic> toJson() => super.toJson()..['name'] = name;
+}
+
+class ListThreads extends AgentMessage {
+  ListThreads({
+    super.messageId,
+    super.senderName,
+    this.limit = 200,
+    this.offset = 0,
+  }) : super(type: agentThreadListType);
+
+  final int limit;
+  final int offset;
+
+  factory ListThreads.fromJson(Map<String, dynamic> json) => ListThreads(
+    messageId: _stringOrNull(json['message_id']),
+    senderName: _stringOrNull(json['sender_name']),
+    limit: _intOrNull(json['limit']) ?? 200,
+    offset: _intOrNull(json['offset']) ?? 0,
+  );
+
+  @override
+  Map<String, dynamic> toJson() =>
+      super.toJson()
+        ..addAll(<String, dynamic>{'limit': limit, 'offset': offset});
+}
+
+class AgentThreadListEntry {
+  const AgentThreadListEntry({
+    required this.path,
+    required this.name,
+    required this.createdAt,
+    required this.modifiedAt,
+  });
+
+  final String path;
+  final String name;
+  final String createdAt;
+  final String modifiedAt;
+
+  factory AgentThreadListEntry.fromJson(Map<String, dynamic> json) =>
+      AgentThreadListEntry(
+        path: _requiredString(json, 'path'),
+        name: _requiredString(json, 'name'),
+        createdAt: _stringOrNull(json['created_at']) ?? '',
+        modifiedAt: _stringOrNull(json['modified_at']) ?? '',
+      );
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+    'path': path,
+    'name': name,
+    'created_at': createdAt,
+    'modified_at': modifiedAt,
+  };
+}
+
+class ThreadsListed extends AgentMessage {
+  ThreadsListed({
+    required this.sourceMessageId,
+    required this.threads,
+    required this.total,
+    required this.offset,
+    required this.limit,
+    super.messageId,
+    super.senderName,
+  }) : super(type: agentThreadListedType);
+
+  final String sourceMessageId;
+  final List<AgentThreadListEntry> threads;
+  final int total;
+  final int offset;
+  final int limit;
+
+  factory ThreadsListed.fromJson(Map<String, dynamic> json) {
+    final rawThreads = json['threads'];
+    final threads = rawThreads is List
+        ? rawThreads
+              .map(_dynamicMapOrNull)
+              .whereType<Map<String, dynamic>>()
+              .map(AgentThreadListEntry.fromJson)
+              .toList(growable: false)
+        : const <AgentThreadListEntry>[];
+    return ThreadsListed(
+      messageId: _stringOrNull(json['message_id']),
+      senderName: _stringOrNull(json['sender_name']),
+      sourceMessageId: _requiredString(json, 'source_message_id'),
+      threads: threads,
+      total: _intOrNull(json['total']) ?? threads.length,
+      offset: _intOrNull(json['offset']) ?? 0,
+      limit: _intOrNull(json['limit']) ?? threads.length,
+    );
+  }
+
+  @override
+  Map<String, dynamic> toJson() => super.toJson()
+    ..addAll(<String, dynamic>{
+      'source_message_id': sourceMessageId,
+      'threads': threads.map((thread) => thread.toJson()).toList(),
+      'total': total,
+      'offset': offset,
+      'limit': limit,
+    });
+}
+
+class ThreadCreated extends AgentMessage {
+  ThreadCreated({required this.thread, super.messageId, super.senderName})
+    : super(type: agentThreadCreatedType);
+
+  final AgentThreadListEntry thread;
+
+  factory ThreadCreated.fromJson(Map<String, dynamic> json) => ThreadCreated(
+    messageId: _stringOrNull(json['message_id']),
+    senderName: _stringOrNull(json['sender_name']),
+    thread: AgentThreadListEntry.fromJson(_requiredMap(json, 'thread')),
+  );
+
+  @override
+  Map<String, dynamic> toJson() => super.toJson()..['thread'] = thread.toJson();
+}
+
+class ThreadUpdated extends AgentMessage {
+  ThreadUpdated({required this.thread, super.messageId, super.senderName})
+    : super(type: agentThreadUpdatedType);
+
+  final AgentThreadListEntry thread;
+
+  factory ThreadUpdated.fromJson(Map<String, dynamic> json) => ThreadUpdated(
+    messageId: _stringOrNull(json['message_id']),
+    senderName: _stringOrNull(json['sender_name']),
+    thread: AgentThreadListEntry.fromJson(_requiredMap(json, 'thread')),
+  );
+
+  @override
+  Map<String, dynamic> toJson() => super.toJson()..['thread'] = thread.toJson();
+}
+
+class ThreadDeleted extends AgentMessage {
+  ThreadDeleted({required this.path, super.messageId, super.senderName})
+    : super(type: agentThreadDeletedType);
+
+  final String path;
+
+  factory ThreadDeleted.fromJson(Map<String, dynamic> json) => ThreadDeleted(
+    messageId: _stringOrNull(json['message_id']),
+    senderName: _stringOrNull(json['sender_name']),
+    path: _requiredString(json, 'path'),
+  );
+
+  @override
+  Map<String, dynamic> toJson() => super.toJson()..['path'] = path;
 }
 
 class CapabilitiesRequest extends AgentThreadMessage {
@@ -3153,7 +3317,7 @@ class AgentSecretResponse extends AgentThreadMessage {
 
 List<AgentInputContent> agentInputContent({
   required String text,
-  required List<String> attachments,
+  required List<AgentFileContent> attachments,
 }) {
   final content = <AgentInputContent>[];
   final trimmed = text.trim();
@@ -3161,9 +3325,15 @@ List<AgentInputContent> agentInputContent({
     content.add(AgentTextContent(text: text));
   }
   for (final attachment in attachments) {
-    final normalized = attachment.trim();
+    final normalized = attachment.url.trim();
     if (normalized.isNotEmpty) {
-      content.add(AgentFileContent(url: normalized));
+      final name = attachment.name?.trim();
+      content.add(
+        AgentFileContent(
+          url: normalized,
+          name: name != null && name.isNotEmpty ? name : null,
+        ),
+      );
     }
   }
   return content;
