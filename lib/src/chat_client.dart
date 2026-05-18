@@ -221,7 +221,25 @@ abstract class BaseChatClient extends ChangeEmitter {
       }
       final session = openThread(threadPath, load: false);
       if (!omitContent) {
-        session.addAgentMessage(AgentMessageEvent(message: payload));
+        session.addAgentMessage(
+          AgentMessageEvent(
+            message: TurnStart(
+              threadId: threadPath,
+              messageId: payload.messageId,
+              senderName: payload.senderName,
+              content: payload.content,
+              provider: payload.provider,
+              model: payload.model,
+              voice: payload.voice,
+              outputModalities: payload.outputModalities,
+              instructions: payload.instructions,
+              mcp: payload.mcp,
+              clientToolkits: payload.clientToolkits,
+              toolkits: payload.toolkits,
+              toolChoice: payload.toolChoice,
+            ),
+          ),
+        );
       }
       final realtimeConnection = response is ThreadStarted
           ? response.realtimeConnection?.toJson()
