@@ -128,6 +128,11 @@ abstract class AgentMessage {
 
   final String type;
   final String messageId;
+
+  /// Optional display name for the sender.
+  ///
+  /// For messages received over a chat channel, the server fills this from the
+  /// authenticated participant and ignores any client-supplied value.
   final String? senderName;
 
   Map<String, dynamic> toJson() => <String, dynamic>{
