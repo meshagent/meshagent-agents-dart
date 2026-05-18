@@ -173,6 +173,7 @@ abstract class BaseChatClient extends ChangeEmitter {
     List<String>? outputModalities,
     String? realtimeProtocol,
     String? senderName,
+    List<ClientToolkitDescription>? clientToolkits,
     bool omitContent = false,
   }) async {
     final resolvedMessageId = messageId == null || messageId.trim().isEmpty
@@ -199,6 +200,9 @@ abstract class BaseChatClient extends ChangeEmitter {
           ? realtimeProtocol.trim()
           : null,
       senderName: resolvedSenderName,
+      clientToolkits: clientToolkits != null && clientToolkits.isNotEmpty
+          ? clientToolkits
+          : null,
     );
     final completer = Completer<AgentMessage>();
     _pendingStartRequests[resolvedMessageId] = completer;
@@ -217,23 +221,7 @@ abstract class BaseChatClient extends ChangeEmitter {
       }
       final session = openThread(threadPath, load: false);
       if (!omitContent) {
-        session.addAgentMessage(
-          AgentMessageEvent(
-            message: TurnStart(
-              threadId: threadPath,
-              messageId: resolvedMessageId,
-              senderName: payload.senderName,
-              content: payload.content ?? const [],
-              provider: payload.provider,
-              model: payload.model,
-              voice: payload.voice,
-              outputModalities: payload.outputModalities,
-              instructions: payload.instructions,
-              toolkits: payload.toolkits,
-              toolChoice: payload.toolChoice,
-            ),
-          ),
-        );
+        session.addAgentMessage(AgentMessageEvent(message: payload));
       }
       final realtimeConnection = response is ThreadStarted
           ? response.realtimeConnection?.toJson()
@@ -925,6 +913,21 @@ class ChatThreadSession extends ChangeEmitter {
     );
   }
 
+  Future<void> respondToClientToolCall({
+    required String turnId,
+    required String requestId,
+    required Content response,
+  }) {
+    return _client.sendAgentMessage(
+      AgentClientToolCallResponse(
+        threadId: threadPath,
+        turnId: turnId,
+        requestId: requestId,
+        response: response,
+      ),
+    );
+  }
+
   Future<String> sendText({
     String? messageId,
     required String text,
@@ -936,6 +939,7 @@ class ChatThreadSession extends ChangeEmitter {
     String? voice,
     List<String>? outputModalities,
     String? senderName,
+    List<ClientToolkitDescription>? clientToolkits,
   }) async {
     final resolvedMessageId = messageId == null || messageId.trim().isEmpty
         ? const Uuid().v4()
@@ -971,6 +975,9 @@ class ChatThreadSession extends ChangeEmitter {
             outputModalities:
                 outputModalities != null && outputModalities.isNotEmpty
                 ? outputModalities
+                : null,
+            clientToolkits: clientToolkits != null && clientToolkits.isNotEmpty
+                ? clientToolkits
                 : null,
           );
     _markPending(

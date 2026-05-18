@@ -28,6 +28,90 @@ class _FakeChatClient extends BaseChatClient {
 }
 
 void main() {
+  test('turn start serializes typed MCP server config', () {
+    final message = TurnStart(
+      threadId: 'dataset://threads/example',
+      messageId: 'message-1',
+      content: const [],
+      mcp: const TurnMcpConfig(
+        servers: [
+          {
+            'server_label': 'docs',
+            'server_url': 'https://mcp.example.test/mcp',
+            'authorization': 'Bearer secret-token',
+          },
+        ],
+      ),
+    );
+
+    final json = message.toJson();
+    expect(json['toolkits'], isNull);
+    expect(json['mcp'], {
+      'servers': [
+        {
+          'server_label': 'docs',
+          'server_url': 'https://mcp.example.test/mcp',
+          'authorization': 'Bearer secret-token',
+        },
+      ],
+    });
+
+    final parsed = AgentMessage.fromJson(json);
+    expect(parsed, isA<TurnStart>());
+    final parsedTurn = parsed as TurnStart;
+    expect(parsedTurn.mcp?.servers.single['server_label'], 'docs');
+    expect(
+      parsedTurn.mcp?.servers.single['authorization'],
+      'Bearer secret-token',
+    );
+  });
+
+  test(
+    'turn start serializes client toolkit display title separately from callable name',
+    () {
+      final message = TurnStart(
+        threadId: 'dataset://threads/example',
+        messageId: 'message-1',
+        content: const [],
+        clientToolkits: const [
+          ClientToolkitDescription(
+            name: 'ask_user',
+            title: 'Ask User',
+            description: 'Ask the user a question',
+            inputSchema: {
+              'type': 'object',
+              'properties': {
+                'question': {'type': 'string'},
+              },
+            },
+          ),
+        ],
+      );
+
+      final json = message.toJson();
+      expect(json['client_toolkits'], [
+        {
+          'name': 'ask_user',
+          'title': 'Ask User',
+          'description': 'Ask the user a question',
+          'input_schema': {
+            'type': 'object',
+            'properties': {
+              'question': {'type': 'string'},
+            },
+          },
+        },
+      ]);
+
+      final parsed = AgentMessage.fromJson(json);
+      expect(parsed, isA<TurnStart>());
+      final parsedTurn = parsed as TurnStart;
+      expect(parsedTurn.clientToolkits, hasLength(1));
+      expect(parsedTurn.clientToolkits!.single.name, 'ask_user');
+      expect(parsedTurn.clientToolkits!.single.title, 'Ask User');
+    },
+  );
+
   test(
     'thread sessions track pending inputs through acceptance and application',
     () async {
@@ -68,6 +152,119 @@ void main() {
       );
 
       expect(session.pendingInputs, isEmpty);
+    },
+  );
+
+  test('thread sessions include client toolkits on non-steer turns', () async {
+    final client = _FakeChatClient();
+    final session = client.openThread('dataset://threads/example');
+    await session.sendText(
+      text: 'use the client tool',
+      attachments: const <AgentFileContent>[],
+      clientToolkits: const [
+        ClientToolkitDescription(
+          name: 'ask_user',
+          title: 'Ask User',
+          description: 'Ask the user',
+          inputSchema: {'type': 'object'},
+        ),
+      ],
+    );
+
+    final sent = client.sent.whereType<TurnStart>().single;
+    expect(sent.clientToolkits, hasLength(1));
+    expect(sent.clientToolkits!.single.name, 'ask_user');
+    expect(sent.clientToolkits!.single.title, 'Ask User');
+  });
+
+  test(
+    'thread sessions decode and respond to client toolkit requests',
+    () async {
+      final client = _FakeChatClient(participantName: 'jesse.ezell@timu.com');
+      final session = client.openThread('dataset://threads/example');
+      await session.sendText(
+        text: 'use the client tool',
+        attachments: const <AgentFileContent>[],
+        clientToolkits: const [
+          ClientToolkitDescription(
+            name: 'ask_user',
+            title: 'Ask User',
+            description: 'Ask the user a question',
+            inputSchema: {
+              'type': 'object',
+              'additionalProperties': false,
+              'required': ['prompt'],
+              'properties': {
+                'prompt': {
+                  'type': 'string',
+                  'description': 'Prompt or question for the user.',
+                },
+              },
+            },
+          ),
+        ],
+      );
+
+      final sentTurnStart = client.sent.whereType<TurnStart>().single;
+      expect(sentTurnStart.clientToolkits, hasLength(1));
+      expect(sentTurnStart.clientToolkits!.single.name, 'ask_user');
+
+      final request = AgentMessage.fromJson({
+        'type': agentClientToolCallRequestedType,
+        'message_id': 'request-message-1',
+        'thread_id': session.threadPath,
+        'turn_id': 'turn-1',
+        'request_id': 'request-1',
+        'provider': 'openai',
+        'model': 'gpt-5.5',
+        'toolkit': 'client',
+        'tool': 'ask_user',
+        'arguments': {'prompt': 'What should I answer?'},
+      });
+      expect(request, isA<AgentClientToolCallRequested>());
+
+      client.handleAgentMessage(request);
+
+      final localRequest = session.messages
+          .map((event) => event.message)
+          .whereType<AgentClientToolCallRequested>()
+          .single;
+      expect(localRequest.turnId, 'turn-1');
+      expect(localRequest.requestId, 'request-1');
+      expect(localRequest.toolkit, 'client');
+      expect(localRequest.tool, 'ask_user');
+      expect(localRequest.arguments, {'prompt': 'What should I answer?'});
+
+      await session.respondToClientToolCall(
+        turnId: localRequest.turnId,
+        requestId: localRequest.requestId,
+        response: JsonContent(json: {'answer': 'blue'}),
+      );
+
+      final response = client.sent
+          .whereType<AgentClientToolCallResponse>()
+          .single;
+      expect(response.threadId, session.threadPath);
+      expect(response.turnId, 'turn-1');
+      expect(response.requestId, 'request-1');
+      expect(response.toJson(), {
+        'type': agentClientToolCallResponseType,
+        'message_id': response.messageId,
+        'thread_id': session.threadPath,
+        'turn_id': 'turn-1',
+        'request_id': 'request-1',
+        'response': {
+          'type': 'json',
+          'json': {'answer': 'blue'},
+        },
+      });
+
+      final parsedResponse = AgentMessage.fromJson(response.toJson());
+      expect(parsedResponse, isA<AgentClientToolCallResponse>());
+      final parsedContent =
+          (parsedResponse as AgentClientToolCallResponse).response;
+      expect(parsedContent, isA<JsonContent>());
+      expect((parsedContent as JsonContent).json, {'answer': 'blue'});
     },
   );
 
@@ -225,10 +422,20 @@ void main() {
         messageId: 'client-message-1',
         message: 'hello',
         attachments: const <AgentFileContent>[],
+        clientToolkits: const [
+          ClientToolkitDescription(
+            name: 'ask_user',
+            title: 'Ask User',
+            description: 'Ask the user a question',
+            inputSchema: {'type': 'object'},
+          ),
+        ],
       );
 
       final startThread = client.sent.whereType<StartThread>().single;
       expect(startThread.messageId, 'client-message-1');
+      expect(startThread.clientToolkits, hasLength(1));
+      expect(startThread.clientToolkits!.single.title, 'Ask User');
 
       client.handleAgentMessage(
         ThreadStarted(
@@ -246,6 +453,8 @@ void main() {
       expect(localTurnStart.threadId, 'dataset://threads/created');
       expect(localTurnStart.messageId, 'client-message-1');
       expect(localTurnStart.content, isNotEmpty);
+      expect(localTurnStart.clientToolkits, hasLength(1));
+      expect(localTurnStart.clientToolkits!.single.name, 'ask_user');
     },
   );
 

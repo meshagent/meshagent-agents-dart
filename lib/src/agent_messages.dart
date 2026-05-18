@@ -74,6 +74,10 @@ const String agentToolCallLogDeltaType = 'meshagent.agent.tool_call.log_delta';
 const String agentToolCallEndedType = 'meshagent.agent.tool_call.ended';
 const String agentToolCallApprovalRequestedType =
     'meshagent.agent.tool_call.approval_requested';
+const String agentClientToolCallRequestedType =
+    'meshagent.agent.client_tool_call.requested';
+const String agentClientToolCallCancelledType =
+    'meshagent.agent.client_tool_call.cancelled';
 const String agentSecretRequestedType = 'meshagent.agent.secret.requested';
 const String agentThreadStatusType = 'meshagent.agent.thread.status';
 const String agentConnectionStatusType = 'meshagent.agent.connection.status';
@@ -111,6 +115,8 @@ const String agentUsageUpdatedType = 'meshagent.agent.usage.updated';
 const String agentToolApproveType = 'meshagent.agent.tool_call.approve';
 const String agentToolRejectType = 'meshagent.agent.tool_call.reject';
 const String agentSecretResponseType = 'meshagent.agent.secret.response';
+const String agentClientToolCallResponseType =
+    'meshagent.agent.client_tool_call.response';
 
 typedef AgentPayload = Map<String, dynamic>;
 
@@ -242,6 +248,10 @@ abstract class AgentMessage {
         return AgentToolCallEnded.fromJson(json);
       case agentToolCallApprovalRequestedType:
         return AgentToolCallApprovalRequested.fromJson(json);
+      case agentClientToolCallRequestedType:
+        return AgentClientToolCallRequested.fromJson(json);
+      case agentClientToolCallCancelledType:
+        return AgentClientToolCallCancelled.fromJson(json);
       case agentSecretRequestedType:
         return AgentSecretRequested.fromJson(json);
       case agentThreadStatusType:
@@ -288,6 +298,8 @@ abstract class AgentMessage {
         return RejectAgentToolCall.fromJson(json);
       case agentSecretResponseType:
         return AgentSecretResponse.fromJson(json);
+      case agentClientToolCallResponseType:
+        return AgentClientToolCallResponse.fromJson(json);
     }
     throw ArgumentError.value(
       type,
@@ -364,6 +376,47 @@ class TurnToolkitConfig {
   };
 }
 
+class TurnMcpConfig {
+  const TurnMcpConfig({this.servers = const <Map<String, dynamic>>[]});
+
+  final List<Map<String, dynamic>> servers;
+
+  factory TurnMcpConfig.fromJson(Map<String, dynamic> json) => TurnMcpConfig(
+    servers: _mapListOrNull(json['servers']) ?? const <Map<String, dynamic>>[],
+  );
+
+  Map<String, dynamic> toJson() => <String, dynamic>{'servers': servers};
+}
+
+class ClientToolkitDescription {
+  const ClientToolkitDescription({
+    required this.name,
+    this.title,
+    this.description,
+    required this.inputSchema,
+  });
+
+  final String name;
+  final String? title;
+  final String? description;
+  final Map<String, dynamic> inputSchema;
+
+  factory ClientToolkitDescription.fromJson(Map<String, dynamic> json) =>
+      ClientToolkitDescription(
+        name: _requiredString(json, 'name'),
+        title: _stringOrNull(json['title']),
+        description: _stringOrNull(json['description']),
+        inputSchema: _requiredMap(json, 'input_schema'),
+      );
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+    'name': name,
+    if (title != null) 'title': title,
+    if (description != null) 'description': description,
+    'input_schema': inputSchema,
+  };
+}
+
 class StartThread extends AgentMessage {
   StartThread({
     super.messageId,
@@ -376,6 +429,8 @@ class StartThread extends AgentMessage {
     this.voice,
     this.outputModalities,
     this.instructions,
+    this.mcp,
+    this.clientToolkits,
     this.toolkits,
     this.toolChoice,
   }) : super(type: agentThreadStartType);
@@ -388,6 +443,8 @@ class StartThread extends AgentMessage {
   final String? voice;
   final List<String>? outputModalities;
   final String? instructions;
+  final TurnMcpConfig? mcp;
+  final List<ClientToolkitDescription>? clientToolkits;
   final Map<String, TurnToolkitConfig>? toolkits;
   final ToolChoice? toolChoice;
 
@@ -402,6 +459,11 @@ class StartThread extends AgentMessage {
     voice: _stringOrNull(json['voice']),
     outputModalities: _stringListOrNull(json['output_modalities']),
     instructions: _stringOrNull(json['instructions']),
+    mcp: _turnMcpConfigOrNull(json['mcp']),
+    clientToolkits: _objectListOrNull(
+      json['client_toolkits'],
+      ClientToolkitDescription.fromJson,
+    ),
     toolkits: _toolkitsOrNull(json['toolkits']),
     toolChoice: _toolChoiceOrNull(json['tool_choice']),
   );
@@ -418,6 +480,11 @@ class StartThread extends AgentMessage {
       if (voice != null) 'voice': voice,
       if (outputModalities != null) 'output_modalities': outputModalities,
       if (instructions != null) 'instructions': instructions,
+      if (mcp != null) 'mcp': mcp!.toJson(),
+      if (clientToolkits != null)
+        'client_toolkits': clientToolkits!
+            .map((entry) => entry.toJson())
+            .toList(),
       if (toolkits != null)
         'toolkits': toolkits!.map(
           (key, value) => MapEntry(key, value.toJson()),
@@ -438,6 +505,8 @@ class TurnStart extends AgentThreadMessage {
     this.voice,
     this.outputModalities,
     this.instructions,
+    this.mcp,
+    this.clientToolkits,
     this.toolkits,
     this.toolChoice,
   }) : content = content ?? <AgentInputContent>[],
@@ -450,6 +519,8 @@ class TurnStart extends AgentThreadMessage {
   final String? voice;
   final List<String>? outputModalities;
   final String? instructions;
+  final TurnMcpConfig? mcp;
+  final List<ClientToolkitDescription>? clientToolkits;
   final Map<String, TurnToolkitConfig>? toolkits;
   final ToolChoice? toolChoice;
 
@@ -464,6 +535,11 @@ class TurnStart extends AgentThreadMessage {
     voice: _stringOrNull(json['voice']),
     outputModalities: _stringListOrNull(json['output_modalities']),
     instructions: _stringOrNull(json['instructions']),
+    mcp: _turnMcpConfigOrNull(json['mcp']),
+    clientToolkits: _objectListOrNull(
+      json['client_toolkits'],
+      ClientToolkitDescription.fromJson,
+    ),
     toolkits: _toolkitsOrNull(json['toolkits']),
     toolChoice: _toolChoiceOrNull(json['tool_choice']),
   );
@@ -478,6 +554,11 @@ class TurnStart extends AgentThreadMessage {
       if (voice != null) 'voice': voice,
       if (outputModalities != null) 'output_modalities': outputModalities,
       if (instructions != null) 'instructions': instructions,
+      if (mcp != null) 'mcp': mcp!.toJson(),
+      if (clientToolkits != null)
+        'client_toolkits': clientToolkits!
+            .map((entry) => entry.toJson())
+            .toList(),
       if (toolkits != null)
         'toolkits': toolkits!.map(
           (key, value) => MapEntry(key, value.toJson()),
@@ -966,7 +1047,6 @@ class ToolkitCapabilities {
     required this.name,
     this.title,
     this.description,
-    this.thumbnailUrl,
     this.rules = const <String>[],
     this.clientOptions,
     this.hidden = false,
@@ -976,7 +1056,6 @@ class ToolkitCapabilities {
   final String name;
   final String? title;
   final String? description;
-  final String? thumbnailUrl;
   final List<String> rules;
   final Map<String, dynamic>? clientOptions;
   final bool hidden;
@@ -987,7 +1066,6 @@ class ToolkitCapabilities {
         name: _requiredString(json, 'name'),
         title: _stringOrNull(json['title']),
         description: _stringOrNull(json['description']),
-        thumbnailUrl: _stringOrNull(json['thumbnail_url']),
         rules: _stringList(json['rules']),
         clientOptions: _dynamicMapOrNull(json['client_options']),
         hidden: json['hidden'] == true,
@@ -998,7 +1076,6 @@ class ToolkitCapabilities {
     'name': name,
     if (title != null) 'title': title,
     if (description != null) 'description': description,
-    if (thumbnailUrl != null) 'thumbnail_url': thumbnailUrl,
     'rules': rules,
     if (clientOptions != null) 'client_options': clientOptions,
     'hidden': hidden,
@@ -2331,6 +2408,97 @@ class AgentSecretRequested extends AgentLLMMessage {
     });
 }
 
+class AgentClientToolCallRequested extends AgentLLMMessage {
+  AgentClientToolCallRequested({
+    required super.threadId,
+    required this.turnId,
+    required this.requestId,
+    required this.toolkit,
+    required this.tool,
+    super.messageId,
+    super.senderName,
+    super.provider,
+    super.model,
+    Map<String, dynamic>? arguments,
+  }) : arguments = arguments ?? <String, dynamic>{},
+       super(type: agentClientToolCallRequestedType);
+
+  final String turnId;
+  final String requestId;
+  final String toolkit;
+  final String tool;
+  final Map<String, dynamic> arguments;
+
+  factory AgentClientToolCallRequested.fromJson(Map<String, dynamic> json) =>
+      AgentClientToolCallRequested(
+        threadId: _requiredString(json, 'thread_id'),
+        messageId: _stringOrNull(json['message_id']),
+        senderName: _stringOrNull(json['sender_name']),
+        provider: _stringOrNull(json['provider']),
+        model: _stringOrNull(json['model']),
+        turnId: _requiredString(json, 'turn_id'),
+        requestId: _requiredString(json, 'request_id'),
+        toolkit: _requiredString(json, 'toolkit'),
+        tool: _requiredString(json, 'tool'),
+        arguments: _dynamicMapOrNull(json['arguments']),
+      );
+
+  @override
+  Map<String, dynamic> toJson() => super.toJson()
+    ..addAll(<String, dynamic>{
+      'turn_id': turnId,
+      'request_id': requestId,
+      'toolkit': toolkit,
+      'tool': tool,
+      'arguments': arguments,
+    });
+}
+
+class AgentClientToolCallCancelled extends AgentLLMMessage {
+  AgentClientToolCallCancelled({
+    required super.threadId,
+    required this.turnId,
+    required this.requestId,
+    required this.toolkit,
+    required this.tool,
+    super.messageId,
+    super.senderName,
+    super.provider,
+    super.model,
+    this.reason,
+  }) : super(type: agentClientToolCallCancelledType);
+
+  final String turnId;
+  final String requestId;
+  final String toolkit;
+  final String tool;
+  final String? reason;
+
+  factory AgentClientToolCallCancelled.fromJson(Map<String, dynamic> json) =>
+      AgentClientToolCallCancelled(
+        threadId: _requiredString(json, 'thread_id'),
+        messageId: _stringOrNull(json['message_id']),
+        senderName: _stringOrNull(json['sender_name']),
+        provider: _stringOrNull(json['provider']),
+        model: _stringOrNull(json['model']),
+        turnId: _requiredString(json, 'turn_id'),
+        requestId: _requiredString(json, 'request_id'),
+        toolkit: _requiredString(json, 'toolkit'),
+        tool: _requiredString(json, 'tool'),
+        reason: _stringOrNull(json['reason']),
+      );
+
+  @override
+  Map<String, dynamic> toJson() => super.toJson()
+    ..addAll(<String, dynamic>{
+      'turn_id': turnId,
+      'request_id': requestId,
+      'toolkit': toolkit,
+      'tool': tool,
+      if (reason != null) 'reason': reason,
+    });
+}
+
 class AgentThreadStatus extends AgentThreadMessage {
   AgentThreadStatus({
     required super.threadId,
@@ -3315,6 +3483,48 @@ class AgentSecretResponse extends AgentThreadMessage {
     });
 }
 
+class AgentClientToolCallResponse extends AgentThreadMessage {
+  AgentClientToolCallResponse({
+    required super.threadId,
+    required this.turnId,
+    required this.requestId,
+    required this.response,
+    super.messageId,
+    super.senderName,
+  }) : super(type: agentClientToolCallResponseType);
+
+  final String turnId;
+  final String requestId;
+  final Content response;
+
+  factory AgentClientToolCallResponse.fromJson(Map<String, dynamic> json) {
+    final response = _contentOrNull(json['response']);
+    if (response == null) {
+      throw ArgumentError.value(
+        json,
+        'json',
+        "missing content field 'response'",
+      );
+    }
+    return AgentClientToolCallResponse(
+      threadId: _requiredString(json, 'thread_id'),
+      messageId: _stringOrNull(json['message_id']),
+      senderName: _stringOrNull(json['sender_name']),
+      turnId: _requiredString(json, 'turn_id'),
+      requestId: _requiredString(json, 'request_id'),
+      response: response,
+    );
+  }
+
+  @override
+  Map<String, dynamic> toJson() => super.toJson()
+    ..addAll(<String, dynamic>{
+      'turn_id': turnId,
+      'request_id': requestId,
+      'response': _contentHeader(response),
+    });
+}
+
 List<AgentInputContent> agentInputContent({
   required String text,
   required List<AgentFileContent> attachments,
@@ -3476,6 +3686,18 @@ List<T> _objectList<T>(
       .toList();
 }
 
+List<T>? _objectListOrNull<T>(
+  Object? value,
+  T Function(Map<String, dynamic> json) fromJson,
+) {
+  if (value is! Iterable) {
+    return null;
+  }
+  return value
+      .map((entry) => fromJson(Map<String, dynamic>.from(entry as Map)))
+      .toList();
+}
+
 List<Map<String, dynamic>>? _mapListOrNull(Object? value) {
   if (value is! Iterable) {
     return null;
@@ -3494,6 +3716,11 @@ Map<String, TurnToolkitConfig>? _toolkitsOrNull(Object? value) {
       TurnToolkitConfig.fromJson(Map<String, dynamic>.from(value as Map)),
     ),
   );
+}
+
+TurnMcpConfig? _turnMcpConfigOrNull(Object? value) {
+  final map = _dynamicMapOrNull(value);
+  return map == null ? null : TurnMcpConfig.fromJson(map);
 }
 
 ToolChoice? _toolChoiceOrNull(Object? value) {

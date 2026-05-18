@@ -1,4 +1,11 @@
-export 'package:meshagent/meshagent.dart' show AgentFileContent;
+export 'package:meshagent/meshagent.dart'
+    show
+        AgentFileContent,
+        Content,
+        EmptyContent,
+        ErrorContent,
+        JsonContent,
+        TextContent;
 
 export 'src/agent_messages.dart';
 export 'src/chat_client.dart';
