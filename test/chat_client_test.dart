@@ -415,7 +415,7 @@ void main() {
   });
 
   test(
-    'startThread reuses caller message id and records a thread-scoped turn start',
+    'startThread reuses caller message id and records the thread start',
     () async {
       final client = _FakeChatClient();
       final startFuture = client.startThread(
@@ -446,15 +446,14 @@ void main() {
 
       final result = await startFuture;
       expect(result.threadPath, 'dataset://threads/created');
-      final localTurnStart = result.session.messages
+      final localThreadStart = result.session.messages
           .map((event) => event.message)
-          .whereType<TurnStart>()
+          .whereType<StartThread>()
           .single;
-      expect(localTurnStart.threadId, 'dataset://threads/created');
-      expect(localTurnStart.messageId, 'client-message-1');
-      expect(localTurnStart.content, isNotEmpty);
-      expect(localTurnStart.clientToolkits, hasLength(1));
-      expect(localTurnStart.clientToolkits!.single.name, 'ask_user');
+      expect(localThreadStart.messageId, 'client-message-1');
+      expect(localThreadStart.content, isNotEmpty);
+      expect(localThreadStart.clientToolkits, hasLength(1));
+      expect(localThreadStart.clientToolkits!.single.name, 'ask_user');
     },
   );
 
@@ -479,11 +478,11 @@ void main() {
       );
 
       final result = await startFuture;
-      final localTurnStart = result.session.messages
+      final localThreadStart = result.session.messages
           .map((event) => event.message)
-          .whereType<TurnStart>()
+          .whereType<StartThread>()
           .single;
-      expect(localTurnStart.senderName, 'jesse.ezell@timu.com');
+      expect(localThreadStart.senderName, 'jesse.ezell@timu.com');
     },
   );
 
@@ -509,11 +508,11 @@ void main() {
       );
 
       final result = await startFuture;
-      final localTurnStart = result.session.messages
+      final localThreadStart = result.session.messages
           .map((event) => event.message)
-          .whereType<TurnStart>()
+          .whereType<StartThread>()
           .single;
-      expect(localTurnStart.senderName, 'explicit@example.com');
+      expect(localThreadStart.senderName, 'explicit@example.com');
     },
   );
 
