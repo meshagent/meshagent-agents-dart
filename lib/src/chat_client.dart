@@ -721,7 +721,7 @@ class WebSocketChatClient extends BaseChatClient {
     }
     final normalizedToken = token.trim();
     if (normalizedToken.isNotEmpty) {
-      resolved.add('bearer.$normalizedToken');
+      resolved.add('meshagent-agent.$normalizedToken');
     }
     return resolved;
   }

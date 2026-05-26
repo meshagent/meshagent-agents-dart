@@ -605,7 +605,10 @@ void main() {
 
       expect(result.threadPath, 'dataset://threads/websocket-created');
       expect(await protocolHeader.future, contains('meshagent-msgpack'));
-      expect(await protocolHeader.future, contains('bearer.participant.jwt'));
+      expect(
+        await protocolHeader.future,
+        contains('meshagent-agent.participant.jwt'),
+      );
       expect(await received.future, containsPair('type', agentThreadStartType));
     },
   );
