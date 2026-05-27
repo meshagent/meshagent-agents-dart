@@ -334,10 +334,12 @@ abstract class AgentLLMMessage extends AgentThreadMessage {
     required super.threadId,
     super.messageId,
     super.senderName,
+    this.backend,
     this.provider,
     this.model,
   });
 
+  final String? backend;
   final String? provider;
   final String? model;
 
@@ -429,6 +431,7 @@ class StartThread extends AgentMessage {
     this.content,
     this.name,
     this.realtimeProtocol,
+    this.backend,
     this.provider,
     this.model,
     this.voice,
@@ -443,6 +446,7 @@ class StartThread extends AgentMessage {
   final List<AgentInputContent>? content;
   final String? name;
   final String? realtimeProtocol;
+  final String? backend;
   final String? provider;
   final String? model;
   final String? voice;
@@ -459,6 +463,7 @@ class StartThread extends AgentMessage {
     content: _inputContentListOrNull(json['content']),
     name: _stringOrNull(json['name']),
     realtimeProtocol: _stringOrNull(json['realtime_protocol']),
+    backend: _stringOrNull(json['backend']),
     provider: _stringOrNull(json['provider']),
     model: _stringOrNull(json['model']),
     voice: _stringOrNull(json['voice']),
@@ -480,6 +485,7 @@ class StartThread extends AgentMessage {
         'content': content!.map((entry) => entry.toJson()).toList(),
       if (name != null) 'name': name,
       if (realtimeProtocol != null) 'realtime_protocol': realtimeProtocol,
+      if (backend != null) 'backend': backend,
       if (provider != null) 'provider': provider,
       if (model != null) 'model': model,
       if (voice != null) 'voice': voice,
@@ -505,6 +511,7 @@ class TurnStart extends AgentThreadMessage {
     super.senderName,
     this.turnId,
     List<AgentInputContent>? content,
+    this.backend,
     this.provider,
     this.model,
     this.voice,
@@ -519,6 +526,7 @@ class TurnStart extends AgentThreadMessage {
 
   final String? turnId;
   final List<AgentInputContent> content;
+  final String? backend;
   final String? provider;
   final String? model;
   final String? voice;
@@ -535,6 +543,7 @@ class TurnStart extends AgentThreadMessage {
     senderName: _stringOrNull(json['sender_name']),
     turnId: _stringOrNull(json['turn_id']),
     content: _inputContentList(json['content']),
+    backend: _stringOrNull(json['backend']),
     provider: _stringOrNull(json['provider']),
     model: _stringOrNull(json['model']),
     voice: _stringOrNull(json['voice']),
@@ -554,6 +563,7 @@ class TurnStart extends AgentThreadMessage {
     ..addAll(<String, dynamic>{
       if (turnId != null) 'turn_id': turnId,
       'content': content.map((entry) => entry.toJson()).toList(),
+      if (backend != null) 'backend': backend,
       if (provider != null) 'provider': provider,
       if (model != null) 'model': model,
       if (voice != null) 'voice': voice,
@@ -731,10 +741,12 @@ class OpenThread extends AgentThreadMessage {
     required super.threadId,
     super.messageId,
     super.senderName,
+    this.backend,
     this.load,
     this.sinceTurn,
   }) : super(type: agentThreadOpenType);
 
+  final String? backend;
   final bool? load;
   final String? sinceTurn;
 
@@ -742,6 +754,7 @@ class OpenThread extends AgentThreadMessage {
     threadId: _requiredString(json, 'thread_id'),
     messageId: _stringOrNull(json['message_id']),
     senderName: _stringOrNull(json['sender_name']),
+    backend: _stringOrNull(json['backend']),
     load: _boolOrNull(json['load']),
     sinceTurn: _stringOrNull(json['since_turn']),
   );
@@ -749,6 +762,7 @@ class OpenThread extends AgentThreadMessage {
   @override
   Map<String, dynamic> toJson() => super.toJson()
     ..addAll(<String, dynamic>{
+      if (backend != null) 'backend': backend,
       if (load != null) 'load': load,
       if (sinceTurn != null) 'since_turn': sinceTurn,
     });
@@ -1201,6 +1215,7 @@ class AgentProviderInfo {
     required this.name,
     required this.friendlyName,
     this.description,
+    this.backend,
     required this.defaultModel,
     this.models = const <AgentModelInfo>[],
   });
@@ -1208,6 +1223,7 @@ class AgentProviderInfo {
   final String name;
   final String friendlyName;
   final String? description;
+  final String? backend;
   final String defaultModel;
   final List<AgentModelInfo> models;
 
@@ -1216,6 +1232,7 @@ class AgentProviderInfo {
         name: _requiredString(json, 'name'),
         friendlyName: _requiredString(json, 'friendly_name'),
         description: _stringOrNull(json['description']),
+        backend: _stringOrNull(json['backend']),
         defaultModel: _requiredString(json, 'default_model'),
         models: _objectList(json['models'], AgentModelInfo.fromJson),
       );
@@ -1224,6 +1241,7 @@ class AgentProviderInfo {
     'name': name,
     'friendly_name': friendlyName,
     if (description != null) 'description': description,
+    if (backend != null) 'backend': backend,
     'default_model': defaultModel,
     'models': models.map((entry) => entry.toJson()).toList(),
   };
@@ -1270,11 +1288,13 @@ class ChangeModel extends AgentThreadMessage {
     required super.threadId,
     super.messageId,
     super.senderName,
+    this.backend,
     this.provider,
     this.model,
     this.voice,
   }) : super(type: agentModelChangeType);
 
+  final String? backend;
   final String? provider;
   final String? model;
   final String? voice;
@@ -1283,6 +1303,7 @@ class ChangeModel extends AgentThreadMessage {
     threadId: _requiredString(json, 'thread_id'),
     messageId: _stringOrNull(json['message_id']),
     senderName: _stringOrNull(json['sender_name']),
+    backend: _stringOrNull(json['backend']),
     provider: _stringOrNull(json['provider']),
     model: _stringOrNull(json['model']),
     voice: _stringOrNull(json['voice']),
@@ -1291,6 +1312,7 @@ class ChangeModel extends AgentThreadMessage {
   @override
   Map<String, dynamic> toJson() => super.toJson()
     ..addAll(<String, dynamic>{
+      if (backend != null) 'backend': backend,
       if (provider != null) 'provider': provider,
       if (model != null) 'model': model,
       if (voice != null) 'voice': voice,
@@ -1305,6 +1327,7 @@ class AgentModelChanged extends AgentThreadMessage {
     super.messageId,
     super.senderName,
     this.sourceMessageId,
+    this.backend,
     this.voice,
     this.inputFormat,
     this.outputFormat,
@@ -1316,6 +1339,7 @@ class AgentModelChanged extends AgentThreadMessage {
   }) : super(type: agentModelChangedType);
 
   final String? sourceMessageId;
+  final String? backend;
   final String provider;
   final String model;
   final String? voice;
@@ -1333,6 +1357,7 @@ class AgentModelChanged extends AgentThreadMessage {
         messageId: _stringOrNull(json['message_id']),
         senderName: _stringOrNull(json['sender_name']),
         sourceMessageId: _stringOrNull(json['source_message_id']),
+        backend: _stringOrNull(json['backend']),
         provider: _requiredString(json, 'provider'),
         model: _requiredString(json, 'model'),
         voice: _stringOrNull(json['voice']),
@@ -1352,6 +1377,7 @@ class AgentModelChanged extends AgentThreadMessage {
   Map<String, dynamic> toJson() => super.toJson()
     ..addAll(<String, dynamic>{
       if (sourceMessageId != null) 'source_message_id': sourceMessageId,
+      if (backend != null) 'backend': backend,
       'provider': provider,
       'model': model,
       if (voice != null) 'voice': voice,

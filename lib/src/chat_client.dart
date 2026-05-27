@@ -167,6 +167,7 @@ abstract class BaseChatClient extends ChangeEmitter {
     required String message,
     required List<AgentFileContent> attachments,
     String? name,
+    String? backend,
     String? provider,
     String? model,
     String? voice,
@@ -187,6 +188,9 @@ abstract class BaseChatClient extends ChangeEmitter {
           ? null
           : agentInputContent(text: message, attachments: attachments),
       name: name != null && name.trim().isNotEmpty ? name.trim() : null,
+      backend: backend != null && backend.trim().isNotEmpty
+          ? backend.trim()
+          : null,
       provider: provider != null && provider.trim().isNotEmpty
           ? provider.trim()
           : null,
@@ -892,6 +896,7 @@ class ChatThreadSession extends ChangeEmitter {
   }
 
   Future<void> changeModel({
+    String? backend,
     required String provider,
     required String model,
     String? voice,
@@ -900,6 +905,9 @@ class ChatThreadSession extends ChangeEmitter {
       ChangeModel(
         threadId: threadPath,
         messageId: const Uuid().v4(),
+        backend: backend != null && backend.trim().isNotEmpty
+            ? backend.trim()
+            : null,
         provider: provider,
         model: model,
         voice: voice != null && voice.trim().isNotEmpty ? voice.trim() : null,
@@ -934,6 +942,7 @@ class ChatThreadSession extends ChangeEmitter {
     required List<AgentFileContent> attachments,
     bool steer = false,
     String? turnId,
+    String? backend,
     String? provider,
     String? model,
     String? voice,
@@ -963,6 +972,9 @@ class ChatThreadSession extends ChangeEmitter {
                 ? senderName.trim()
                 : null,
             content: agentInputContent(text: text, attachments: attachments),
+            backend: backend != null && backend.trim().isNotEmpty
+                ? backend.trim()
+                : null,
             provider: provider != null && provider.trim().isNotEmpty
                 ? provider.trim()
                 : null,
@@ -1018,6 +1030,7 @@ class ChatThreadSession extends ChangeEmitter {
 
   Future<String> commitRealtimeAudio({
     required String turnId,
+    String? backend,
     String? provider,
     String? model,
     String? voice,
@@ -1036,6 +1049,9 @@ class ChatThreadSession extends ChangeEmitter {
         threadId: threadPath,
         messageId: const Uuid().v4(),
         turnId: turnId,
+        backend: backend != null && backend.trim().isNotEmpty
+            ? backend.trim()
+            : null,
         provider: provider != null && provider.trim().isNotEmpty
             ? provider.trim()
             : null,
