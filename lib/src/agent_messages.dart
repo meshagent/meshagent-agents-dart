@@ -121,13 +121,25 @@ const String agentClientToolCallResponseType =
 typedef AgentPayload = Map<String, dynamic>;
 
 abstract class AgentMessage {
-  AgentMessage({required this.type, String? messageId, this.senderName})
-    : messageId = messageId == null || messageId.trim().isEmpty
-          ? const Uuid().v4()
-          : messageId.trim();
+  AgentMessage({
+    required this.type,
+    String? messageId,
+    this.senderName,
+    DateTime? createdAt,
+  }) : messageId = messageId == null || messageId.trim().isEmpty
+           ? const Uuid().v4()
+           : messageId.trim(),
+       _createdAtUtc = (createdAt ?? DateTime.now().toUtc()).toUtc();
 
   final String type;
   final String messageId;
+  DateTime _createdAtUtc;
+
+  DateTime get createdAtUtc => _createdAtUtc;
+
+  void _setCreatedAtUtc(DateTime value) {
+    _createdAtUtc = value.toUtc();
+  }
 
   /// Optional display name for the sender.
   ///
@@ -138,6 +150,7 @@ abstract class AgentMessage {
   Map<String, dynamic> toJson() => <String, dynamic>{
     'type': type,
     'message_id': messageId,
+    'created_at': createdAtUtc.toIso8601String(),
     if (senderName != null) 'sender_name': senderName,
   };
 
@@ -148,169 +161,294 @@ abstract class AgentMessage {
     }
     switch (type) {
       case agentThreadStartType:
-        return StartThread.fromJson(json);
+        return _withPayloadCreatedAt(json, StartThread.fromJson(json));
       case agentTurnStartType:
-        return TurnStart.fromJson(json);
+        return _withPayloadCreatedAt(json, TurnStart.fromJson(json));
       case agentTurnSteerType:
-        return TurnSteer.fromJson(json);
+        return _withPayloadCreatedAt(json, TurnSteer.fromJson(json));
       case agentTurnInterruptType:
-        return TurnInterrupt.fromJson(json);
+        return _withPayloadCreatedAt(json, TurnInterrupt.fromJson(json));
       case agentRealtimeAudioChunkType:
-        return AgentRealtimeAudioChunk.fromJson(json);
+        return _withPayloadCreatedAt(
+          json,
+          AgentRealtimeAudioChunk.fromJson(json),
+        );
       case agentRealtimeAudioCommitType:
-        return AgentRealtimeAudioCommit.fromJson(json);
+        return _withPayloadCreatedAt(
+          json,
+          AgentRealtimeAudioCommit.fromJson(json),
+        );
       case agentThreadClearType:
-        return ClearThread.fromJson(json);
+        return _withPayloadCreatedAt(json, ClearThread.fromJson(json));
       case agentThreadOpenType:
-        return OpenThread.fromJson(json);
+        return _withPayloadCreatedAt(json, OpenThread.fromJson(json));
       case agentThreadCloseType:
-        return CloseThread.fromJson(json);
+        return _withPayloadCreatedAt(json, CloseThread.fromJson(json));
       case agentParticipantConnectType:
-        return ParticipantConnect.fromJson(json);
+        return _withPayloadCreatedAt(json, ParticipantConnect.fromJson(json));
       case agentParticipantDisconnectType:
-        return ParticipantDisconnect.fromJson(json);
+        return _withPayloadCreatedAt(
+          json,
+          ParticipantDisconnect.fromJson(json),
+        );
       case agentThreadDeleteType:
-        return DeleteThread.fromJson(json);
+        return _withPayloadCreatedAt(json, DeleteThread.fromJson(json));
       case agentThreadRenameType:
-        return RenameThread.fromJson(json);
+        return _withPayloadCreatedAt(json, RenameThread.fromJson(json));
       case agentThreadListType:
-        return ListThreads.fromJson(json);
+        return _withPayloadCreatedAt(json, ListThreads.fromJson(json));
       case agentThreadListedType:
-        return ThreadsListed.fromJson(json);
+        return _withPayloadCreatedAt(json, ThreadsListed.fromJson(json));
       case agentThreadCreatedType:
-        return ThreadCreated.fromJson(json);
+        return _withPayloadCreatedAt(json, ThreadCreated.fromJson(json));
       case agentThreadUpdatedType:
-        return ThreadUpdated.fromJson(json);
+        return _withPayloadCreatedAt(json, ThreadUpdated.fromJson(json));
       case agentThreadDeletedType:
-        return ThreadDeleted.fromJson(json);
+        return _withPayloadCreatedAt(json, ThreadDeleted.fromJson(json));
       case agentCapabilitiesRequestType:
-        return CapabilitiesRequest.fromJson(json);
+        return _withPayloadCreatedAt(json, CapabilitiesRequest.fromJson(json));
       case agentCapabilitiesResponseType:
-        return CapabilitiesResponse.fromJson(json);
+        return _withPayloadCreatedAt(json, CapabilitiesResponse.fromJson(json));
       case agentModelsRequestType:
-        return ModelsRequest.fromJson(json);
+        return _withPayloadCreatedAt(json, ModelsRequest.fromJson(json));
       case agentModelsResponseType:
-        return ModelsResponse.fromJson(json);
+        return _withPayloadCreatedAt(json, ModelsResponse.fromJson(json));
       case agentModelChangeType:
-        return ChangeModel.fromJson(json);
+        return _withPayloadCreatedAt(json, ChangeModel.fromJson(json));
       case agentModelChangedType:
-        return AgentModelChanged.fromJson(json);
+        return _withPayloadCreatedAt(json, AgentModelChanged.fromJson(json));
       case agentThreadClearedType:
-        return ThreadCleared.fromJson(json);
+        return _withPayloadCreatedAt(json, ThreadCleared.fromJson(json));
       case agentTurnStartAcceptedType:
-        return TurnStartAccepted.fromJson(json);
+        return _withPayloadCreatedAt(json, TurnStartAccepted.fromJson(json));
       case agentTurnStartRejectedType:
-        return TurnStartRejected.fromJson(json);
+        return _withPayloadCreatedAt(json, TurnStartRejected.fromJson(json));
       case agentTurnInterruptAcceptedType:
-        return TurnInterruptAccepted.fromJson(json);
+        return _withPayloadCreatedAt(
+          json,
+          TurnInterruptAccepted.fromJson(json),
+        );
       case agentTurnInterruptedType:
-        return TurnInterrupted.fromJson(json);
+        return _withPayloadCreatedAt(json, TurnInterrupted.fromJson(json));
       case agentTurnSteerAcceptedType:
-        return TurnSteerAccepted.fromJson(json);
+        return _withPayloadCreatedAt(json, TurnSteerAccepted.fromJson(json));
       case agentTurnSteeredType:
-        return TurnSteered.fromJson(json);
+        return _withPayloadCreatedAt(json, TurnSteered.fromJson(json));
       case agentTurnSteerRejectedType:
-        return TurnSteerRejected.fromJson(json);
+        return _withPayloadCreatedAt(json, TurnSteerRejected.fromJson(json));
       case agentTurnStartedType:
-        return TurnStarted.fromJson(json);
+        return _withPayloadCreatedAt(json, TurnStarted.fromJson(json));
       case agentTurnEndedType:
-        return TurnEnded.fromJson(json);
+        return _withPayloadCreatedAt(json, TurnEnded.fromJson(json));
       case agentThreadStartedType:
-        return ThreadStarted.fromJson(json);
+        return _withPayloadCreatedAt(json, ThreadStarted.fromJson(json));
       case agentThreadLoadedType:
-        return ThreadLoaded.fromJson(json);
+        return _withPayloadCreatedAt(json, ThreadLoaded.fromJson(json));
       case agentThreadStartRejectedType:
-        return ThreadStartRejected.fromJson(json);
+        return _withPayloadCreatedAt(json, ThreadStartRejected.fromJson(json));
       case agentReasoningContentStartedType:
-        return AgentReasoningContentStarted.fromJson(json);
+        return _withPayloadCreatedAt(
+          json,
+          AgentReasoningContentStarted.fromJson(json),
+        );
       case agentReasoningContentDeltaType:
-        return AgentReasoningContentDelta.fromJson(json);
+        return _withPayloadCreatedAt(
+          json,
+          AgentReasoningContentDelta.fromJson(json),
+        );
       case agentReasoningContentEndedType:
-        return AgentReasoningContentEnded.fromJson(json);
+        return _withPayloadCreatedAt(
+          json,
+          AgentReasoningContentEnded.fromJson(json),
+        );
       case agentTextContentStartedType:
-        return AgentTextContentStarted.fromJson(json);
+        return _withPayloadCreatedAt(
+          json,
+          AgentTextContentStarted.fromJson(json),
+        );
       case agentTextContentDeltaType:
-        return AgentTextContentDelta.fromJson(json);
+        return _withPayloadCreatedAt(
+          json,
+          AgentTextContentDelta.fromJson(json),
+        );
       case agentTextContentEndedType:
-        return AgentTextContentEnded.fromJson(json);
+        return _withPayloadCreatedAt(
+          json,
+          AgentTextContentEnded.fromJson(json),
+        );
       case agentFileContentStartedType:
-        return AgentFileContentStarted.fromJson(json);
+        return _withPayloadCreatedAt(
+          json,
+          AgentFileContentStarted.fromJson(json),
+        );
       case agentFileContentDeltaType:
-        return AgentFileContentDelta.fromJson(json);
+        return _withPayloadCreatedAt(
+          json,
+          AgentFileContentDelta.fromJson(json),
+        );
       case agentFileContentEndedType:
-        return AgentFileContentEnded.fromJson(json);
+        return _withPayloadCreatedAt(
+          json,
+          AgentFileContentEnded.fromJson(json),
+        );
       case agentToolCallPendingType:
-        return AgentToolCallPending.fromJson(json);
+        return _withPayloadCreatedAt(json, AgentToolCallPending.fromJson(json));
       case agentToolCallInProgressType:
-        return AgentToolCallInProgress.fromJson(json);
+        return _withPayloadCreatedAt(
+          json,
+          AgentToolCallInProgress.fromJson(json),
+        );
       case agentToolCallStartedType:
-        return AgentToolCallStarted.fromJson(json);
+        return _withPayloadCreatedAt(json, AgentToolCallStarted.fromJson(json));
       case agentToolCallArgumentsDeltaType:
-        return AgentToolCallArgumentsDelta.fromJson(json);
+        return _withPayloadCreatedAt(
+          json,
+          AgentToolCallArgumentsDelta.fromJson(json),
+        );
       case agentToolCallLogDeltaType:
-        return AgentToolCallLogDelta.fromJson(json);
+        return _withPayloadCreatedAt(
+          json,
+          AgentToolCallLogDelta.fromJson(json),
+        );
       case agentToolCallEndedType:
-        return AgentToolCallEnded.fromJson(json);
+        return _withPayloadCreatedAt(json, AgentToolCallEnded.fromJson(json));
       case agentToolCallApprovalRequestedType:
-        return AgentToolCallApprovalRequested.fromJson(json);
+        return _withPayloadCreatedAt(
+          json,
+          AgentToolCallApprovalRequested.fromJson(json),
+        );
       case agentClientToolCallRequestedType:
-        return AgentClientToolCallRequested.fromJson(json);
+        return _withPayloadCreatedAt(
+          json,
+          AgentClientToolCallRequested.fromJson(json),
+        );
       case agentClientToolCallCancelledType:
-        return AgentClientToolCallCancelled.fromJson(json);
+        return _withPayloadCreatedAt(
+          json,
+          AgentClientToolCallCancelled.fromJson(json),
+        );
       case agentSecretRequestedType:
-        return AgentSecretRequested.fromJson(json);
+        return _withPayloadCreatedAt(json, AgentSecretRequested.fromJson(json));
       case agentThreadStatusType:
-        return AgentThreadStatus.fromJson(json);
+        return _withPayloadCreatedAt(json, AgentThreadStatus.fromJson(json));
       case agentConnectionStatusType:
-        return AgentConnectionStatus.fromJson(json);
+        return _withPayloadCreatedAt(
+          json,
+          AgentConnectionStatus.fromJson(json),
+        );
       case agentThreadEventType:
-        return AgentThreadEvent.fromJson(json);
+        return _withPayloadCreatedAt(json, AgentThreadEvent.fromJson(json));
       case agentImageGenerationStartedType:
-        return AgentImageGenerationStarted.fromJson(json);
+        return _withPayloadCreatedAt(
+          json,
+          AgentImageGenerationStarted.fromJson(json),
+        );
       case agentImageGenerationPartialType:
-        return AgentImageGenerationPartial.fromJson(json);
+        return _withPayloadCreatedAt(
+          json,
+          AgentImageGenerationPartial.fromJson(json),
+        );
       case agentImageGenerationCompletedType:
-        return AgentImageGenerationCompleted.fromJson(json);
+        return _withPayloadCreatedAt(
+          json,
+          AgentImageGenerationCompleted.fromJson(json),
+        );
       case agentImageGenerationFailedType:
-        return AgentImageGenerationFailed.fromJson(json);
+        return _withPayloadCreatedAt(
+          json,
+          AgentImageGenerationFailed.fromJson(json),
+        );
       case agentAudioGenerationStartedType:
-        return AgentAudioGenerationStarted.fromJson(json);
+        return _withPayloadCreatedAt(
+          json,
+          AgentAudioGenerationStarted.fromJson(json),
+        );
       case agentAudioGenerationDeltaType:
-        return AgentAudioGenerationDelta.fromJson(json);
+        return _withPayloadCreatedAt(
+          json,
+          AgentAudioGenerationDelta.fromJson(json),
+        );
       case agentAudioGenerationCompletedType:
-        return AgentAudioGenerationCompleted.fromJson(json);
+        return _withPayloadCreatedAt(
+          json,
+          AgentAudioGenerationCompleted.fromJson(json),
+        );
       case agentAudioGenerationFailedType:
-        return AgentAudioGenerationFailed.fromJson(json);
+        return _withPayloadCreatedAt(
+          json,
+          AgentAudioGenerationFailed.fromJson(json),
+        );
       case agentAudioTranscriptionStartedType:
-        return AgentAudioTranscriptionStarted.fromJson(json);
+        return _withPayloadCreatedAt(
+          json,
+          AgentAudioTranscriptionStarted.fromJson(json),
+        );
       case agentAudioTranscriptionDeltaType:
-        return AgentAudioTranscriptionDelta.fromJson(json);
+        return _withPayloadCreatedAt(
+          json,
+          AgentAudioTranscriptionDelta.fromJson(json),
+        );
       case agentAudioTranscriptionCompletedType:
-        return AgentAudioTranscriptionCompleted.fromJson(json);
+        return _withPayloadCreatedAt(
+          json,
+          AgentAudioTranscriptionCompleted.fromJson(json),
+        );
       case agentAudioTranscriptionFailedType:
-        return AgentAudioTranscriptionFailed.fromJson(json);
+        return _withPayloadCreatedAt(
+          json,
+          AgentAudioTranscriptionFailed.fromJson(json),
+        );
       case agentAudioInputSpeechStartedType:
-        return AgentAudioInputSpeechStarted.fromJson(json);
+        return _withPayloadCreatedAt(
+          json,
+          AgentAudioInputSpeechStarted.fromJson(json),
+        );
       case agentAudioInputSpeechEndedType:
-        return AgentAudioInputSpeechEnded.fromJson(json);
+        return _withPayloadCreatedAt(
+          json,
+          AgentAudioInputSpeechEnded.fromJson(json),
+        );
       case agentContextCompactedType:
-        return AgentContextCompacted.fromJson(json);
+        return _withPayloadCreatedAt(
+          json,
+          AgentContextCompacted.fromJson(json),
+        );
       case agentUsageUpdatedType:
-        return AgentUsageUpdated.fromJson(json);
+        return _withPayloadCreatedAt(json, AgentUsageUpdated.fromJson(json));
       case agentToolApproveType:
-        return ApproveAgentToolCall.fromJson(json);
+        return _withPayloadCreatedAt(json, ApproveAgentToolCall.fromJson(json));
       case agentToolRejectType:
-        return RejectAgentToolCall.fromJson(json);
+        return _withPayloadCreatedAt(json, RejectAgentToolCall.fromJson(json));
       case agentSecretResponseType:
-        return AgentSecretResponse.fromJson(json);
+        return _withPayloadCreatedAt(json, AgentSecretResponse.fromJson(json));
       case agentClientToolCallResponseType:
-        return AgentClientToolCallResponse.fromJson(json);
+        return _withPayloadCreatedAt(
+          json,
+          AgentClientToolCallResponse.fromJson(json),
+        );
     }
     throw ArgumentError.value(
       type,
       'json[type]',
       'unsupported agent message type',
     );
+  }
+
+  static AgentMessage _withPayloadCreatedAt(
+    Map<String, dynamic> json,
+    AgentMessage message,
+  ) {
+    final value = json['created_at'] ?? json['timestamp'];
+    DateTime? createdAt;
+    if (value is DateTime) {
+      createdAt = value;
+    } else if (value is String) {
+      createdAt = DateTime.tryParse(value.trim());
+    }
+    if (createdAt != null) {
+      message._setCreatedAtUtc(createdAt);
+    }
+    return message;
   }
 }
 

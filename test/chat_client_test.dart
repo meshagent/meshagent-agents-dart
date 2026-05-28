@@ -28,6 +28,33 @@ class _FakeChatClient extends BaseChatClient {
 }
 
 void main() {
+  test('agent message events expose a stable created_at timestamp', () {
+    final eventTime = DateTime.utc(2026, 5, 28, 16, 11, 48, 538);
+    final event = AgentMessageEvent(
+      message: TurnStarted(
+        threadId: 'dataset://threads/example',
+        turnId: 'turn-1',
+        sourceMessageId: 'message-1',
+      ),
+      createdAt: eventTime,
+    );
+
+    expect(event.payload['created_at'], '2026-05-28T16:11:48.538Z');
+  });
+
+  test('agent message parsing preserves created_at timestamps', () {
+    final parsed = AgentMessage.fromJson({
+      'type': agentTurnStartedType,
+      'message_id': 'event-1',
+      'thread_id': 'dataset://threads/example',
+      'turn_id': 'turn-1',
+      'source_message_id': 'message-1',
+      'created_at': '2026-05-28T16:11:48.538Z',
+    });
+
+    expect(parsed.toJson()['created_at'], '2026-05-28T16:11:48.538Z');
+  });
+
   test('turn start serializes typed MCP server config', () {
     final message = TurnStart(
       threadId: 'dataset://threads/example',
@@ -250,6 +277,7 @@ void main() {
       expect(response.toJson(), {
         'type': agentClientToolCallResponseType,
         'message_id': response.messageId,
+        'created_at': response.createdAtUtc.toIso8601String(),
         'thread_id': session.threadPath,
         'turn_id': 'turn-1',
         'request_id': 'request-1',

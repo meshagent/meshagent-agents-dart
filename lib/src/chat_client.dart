@@ -10,12 +10,21 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import 'agent_messages.dart';
 
 class AgentMessageEvent {
-  const AgentMessageEvent({required this.message, this.attachment});
+  AgentMessageEvent({
+    required this.message,
+    DateTime? createdAt,
+    this.attachment,
+  }) : createdAt = (createdAt ?? message.createdAtUtc).toUtc();
 
   final AgentMessage message;
+  final DateTime createdAt;
   final Uint8List? attachment;
 
-  AgentPayload get payload => message.toJson();
+  AgentPayload get payload {
+    final json = message.toJson();
+    json['created_at'] = createdAt.toIso8601String();
+    return json;
+  }
 }
 
 class PendingAgentInput {
@@ -55,6 +64,18 @@ class PendingAgentInput {
       awaitingOnline: awaitingOnline ?? this.awaitingOnline,
     );
   }
+}
+
+DateTime? _createdAtFromPayload(Map<String, dynamic> payload) {
+  final value = payload['created_at'] ?? payload['timestamp'];
+  if (value is DateTime) {
+    return value.toUtc();
+  }
+  if (value is String) {
+    final parsed = DateTime.tryParse(value.trim());
+    return parsed?.toUtc();
+  }
+  return null;
 }
 
 enum ChatThreadSessionLoadPhase { idle, loading, loaded, failed }
@@ -246,18 +267,32 @@ abstract class BaseChatClient extends ChangeEmitter {
     bool ignoreOffline = false,
   });
 
-  void handleAgentMessage(AgentMessage message, {Uint8List? attachment}) {
+  void handleAgentMessage(
+    AgentMessage message, {
+    DateTime? createdAt,
+    Uint8List? attachment,
+  }) {
     if (message is AgentConnectionStatus) {
       _connectionStatus = message;
       for (final session in _sessionsByPath.values) {
         if (session.isOpen) {
           session.addAgentMessage(
-            AgentMessageEvent(message: message, attachment: attachment),
+            AgentMessageEvent(
+              message: message,
+              createdAt: createdAt,
+              attachment: attachment,
+            ),
           );
         }
       }
     }
-    _events.add(AgentMessageEvent(message: message, attachment: attachment));
+    _events.add(
+      AgentMessageEvent(
+        message: message,
+        createdAt: createdAt,
+        attachment: attachment,
+      ),
+    );
     final sourceMessageId = _sourceMessageId(message);
     if ((message is ThreadStarted || message is ThreadStartRejected) &&
         sourceMessageId != null &&
@@ -277,7 +312,11 @@ abstract class BaseChatClient extends ChangeEmitter {
     }
     final session = _sessionsByPath[threadPath];
     session?.addAgentMessage(
-      AgentMessageEvent(message: message, attachment: attachment),
+      AgentMessageEvent(
+        message: message,
+        createdAt: createdAt,
+        attachment: attachment,
+      ),
     );
     notifyListeners();
   }
@@ -489,11 +528,14 @@ class MessagingChatClient extends BaseChatClient {
     if (rawPayload is Map<String, dynamic>) {
       handleAgentMessage(
         AgentMessage.fromJson(rawPayload),
+        createdAt: _createdAtFromPayload(rawPayload),
         attachment: event.message.attachment,
       );
     } else if (rawPayload is Map) {
+      final payload = Map<String, dynamic>.from(rawPayload);
       handleAgentMessage(
-        AgentMessage.fromJson(Map<String, dynamic>.from(rawPayload)),
+        AgentMessage.fromJson(payload),
+        createdAt: _createdAtFromPayload(payload),
         attachment: event.message.attachment,
       );
     }
