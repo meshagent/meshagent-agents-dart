@@ -27,6 +27,19 @@ class _FakeChatClient extends BaseChatClient {
   }
 }
 
+class _RejectingOpenChatClient extends BaseChatClient {
+  @override
+  Future<void> sendAgentMessage(
+    AgentMessage message, {
+    Uint8List? attachment,
+    bool ignoreOffline = false,
+  }) async {
+    if (message is OpenThread) {
+      throw StateError('agent unavailable');
+    }
+  }
+}
+
 void main() {
   test('agent message events expose a stable created_at timestamp', () {
     final eventTime = DateTime.utc(2026, 5, 28, 16, 11, 48, 538);
@@ -53,6 +66,101 @@ void main() {
     });
 
     expect(parsed.toJson()['created_at'], '2026-05-28T16:11:48.538Z');
+  });
+
+  test('usage updates tolerate missing context window token counts', () {
+    final parsed = AgentMessage.fromJson({
+      'type': agentUsageUpdatedType,
+      'thread_id': 'dataset://threads/test',
+      'turn_id': 'turn-1',
+      'usage': <String, dynamic>{},
+      'context_window': <String, dynamic>{'total_tokens': 128000},
+    });
+
+    expect(parsed, isA<AgentUsageUpdated>());
+    final usage = parsed as AgentUsageUpdated;
+    expect(usage.contextWindow.usedTokens, 0);
+    expect(usage.contextWindow.totalTokens, 128000);
+  });
+
+  test('thread sessions record failed turn ends for rendering', () {
+    final client = _FakeChatClient();
+    final session = client.openThread('dataset://threads/example');
+    final message = TurnEnded(
+      threadId: session.threadPath,
+      turnId: 'turn-1',
+      error: const AgentError(
+        code: 'RoomException',
+        message: 'Error from OpenAI websocket: unknown parameter',
+      ),
+    );
+
+    session.addAgentMessage(AgentMessageEvent(message: message));
+
+    expect(session.messages.map((event) => event.message), [message]);
+    expect(session.pendingInputs, isEmpty);
+  });
+
+  test('routes typed assistant content into the matching open session', () {
+    final client = _FakeChatClient();
+    final session = client.openThread('dataset://threads/example');
+    final message = AgentTextContentDelta(
+      threadId: session.threadPath,
+      turnId: 'turn-1',
+      itemId: 'item-1',
+      phase: 'output',
+      text: 'hello from the agent',
+    );
+
+    client.handleAgentMessage(message);
+
+    expect(message.messageId, isNot('item-1'));
+    expect(session.messages.map((event) => event.message), contains(message));
+  });
+
+  test('dedupes and merges text delta messages by message id and item id', () {
+    final client = _FakeChatClient();
+    final session = client.openThread('dataset://threads/example');
+    final first = AgentTextContentDelta(
+      messageId: 'delta-1',
+      threadId: session.threadPath,
+      turnId: 'turn-1',
+      itemId: 'item-1',
+      phase: 'output',
+      text: 'hello',
+    );
+    final duplicate = AgentTextContentDelta(
+      messageId: 'delta-1',
+      threadId: session.threadPath,
+      turnId: 'turn-1',
+      itemId: 'item-1',
+      phase: 'output',
+      text: ' ignored',
+    );
+    final second = AgentTextContentDelta(
+      messageId: 'delta-2',
+      threadId: session.threadPath,
+      turnId: 'turn-1',
+      itemId: 'item-1',
+      phase: 'output',
+      text: ' world',
+    );
+
+    session.addAgentMessage(AgentMessageEvent(message: first));
+    final event = session.messages.single;
+    var eventChanges = 0;
+    event.addEventListener(() {
+      eventChanges += 1;
+    });
+    session.addAgentMessage(AgentMessageEvent(message: duplicate));
+    expect(eventChanges, 0);
+    session.addAgentMessage(AgentMessageEvent(message: second));
+    expect(eventChanges, 1);
+
+    final messages = session.messages.map((event) => event.message).toList();
+    expect(messages, hasLength(1));
+    expect(messages.single, isA<AgentTextContentDelta>());
+    expect((messages.single as AgentTextContentDelta).text, 'hello world');
   });
 
   test('turn start serializes typed MCP server config', () {
@@ -181,6 +289,55 @@ void main() {
       expect(session.pendingInputs, isEmpty);
     },
   );
+
+  test(
+    'thread sessions append remote accepted input before pending local inputs',
+    () async {
+      final client = _FakeChatClient();
+      final session = client.openThread('dataset://threads/example');
+      await session.sendText(
+        messageId: 'local-message-1',
+        text: 'local pending',
+        attachments: const <AgentFileContent>[],
+      );
+
+      client.handleAgentMessage(
+        TurnStartAccepted(
+          threadId: session.threadPath,
+          turnId: 'turn-1',
+          sourceMessageId: 'remote-message-1',
+          content: agentInputContent(
+            text: 'hello from someone else',
+            attachments: const <AgentFileContent>[],
+          ),
+          senderName: 'teammate',
+        ),
+      );
+
+      final messages = session.messages.map((event) => event.message).toList();
+      expect(messages[0], isA<TurnStartAccepted>());
+      expect((messages[0] as TurnStartAccepted).senderName, 'teammate');
+      expect(messages[1], isA<TurnStart>());
+    },
+  );
+
+  test('thread sessions send selected provider and model', () async {
+    final client = _FakeChatClient();
+    final session = client.openThread('dataset://threads/example');
+
+    await session.sendText(
+      text: 'hello',
+      attachments: const <AgentFileContent>[],
+      backend: 'openai-responses',
+      provider: 'openai',
+      model: 'gpt-5.5',
+    );
+
+    final sent = client.sent.whereType<TurnStart>().last;
+    expect(sent.backend, 'openai-responses');
+    expect(sent.provider, 'openai');
+    expect(sent.model, 'gpt-5.5');
+  });
 
   test('thread sessions include client toolkits on non-steer turns', () async {
     final client = _FakeChatClient();
@@ -405,6 +562,16 @@ void main() {
     },
   );
 
+  test('background open failures mark the load state failed', () async {
+    final client = _RejectingOpenChatClient();
+    final session = client.openThread('dataset://threads/example');
+
+    await _waitFor(
+      () => session.loadState.phase == ChatThreadSessionLoadPhase.failed,
+    );
+    expect(session.loadState.error, isNotNull);
+  });
+
   test('startThread opens the created thread without replay loading', () async {
     final client = _FakeChatClient();
     final startFuture = client.startThread(
@@ -440,6 +607,69 @@ void main() {
       ),
       hasLength(1),
     );
+  });
+
+  test(
+    'keeps new-thread lifecycle messages that arrive before the session opens',
+    () async {
+      final client = _FakeChatClient();
+      final startFuture = client.startThread(
+        messageId: 'client-message-1',
+        message: 'hello',
+        attachments: const <AgentFileContent>[],
+      );
+
+      client.handleAgentMessage(
+        ThreadStarted(
+          sourceMessageId: 'client-message-1',
+          threadId: 'dataset://threads/created',
+        ),
+      );
+      client.handleAgentMessage(
+        TurnStartAccepted(
+          threadId: 'dataset://threads/created',
+          turnId: 'turn-1',
+          sourceMessageId: 'client-message-1',
+          content: agentInputContent(
+            text: 'hello',
+            attachments: const <AgentFileContent>[],
+          ),
+        ),
+      );
+
+      final result = await startFuture;
+      client.handleAgentMessage(
+        TurnStarted(
+          threadId: 'dataset://threads/created',
+          turnId: 'turn-1',
+          sourceMessageId: 'client-message-1',
+        ),
+      );
+
+      expect(result.session.pendingInputs, isEmpty);
+    },
+  );
+
+  test('broadcasts agent events to independent subscribers', () async {
+    final client = _FakeChatClient();
+    final first = <AgentMessageEvent>[];
+    final second = <AgentMessageEvent>[];
+    final firstSubscription = client.events.listen(first.add);
+    final secondSubscription = client.events.listen(second.add);
+    addTearDown(firstSubscription.cancel);
+    addTearDown(secondSubscription.cancel);
+
+    final message = AgentTextContentDelta(
+      threadId: 'dataset://threads/example',
+      turnId: 'turn-1',
+      itemId: 'message-1',
+      text: 'hello',
+    );
+    client.handleAgentMessage(message);
+
+    await _waitFor(() => first.isNotEmpty && second.isNotEmpty);
+    expect(first.single.message, same(message));
+    expect(second.single.message, same(message));
   });
 
   test(

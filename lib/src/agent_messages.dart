@@ -438,7 +438,7 @@ abstract class AgentMessage {
     Map<String, dynamic> json,
     AgentMessage message,
   ) {
-    final value = json['created_at'] ?? json['timestamp'];
+    final value = json['created_at'];
     DateTime? createdAt;
     if (value is DateTime) {
       createdAt = value;
@@ -3508,7 +3508,7 @@ class AgentContextWindowUsage {
 
   factory AgentContextWindowUsage.fromJson(Map<String, dynamic> json) =>
       AgentContextWindowUsage(
-        usedTokens: _requiredInt(json, 'used_tokens'),
+        usedTokens: _intOrNull(json['used_tokens']) ?? 0,
         totalTokens: _intOrNull(json['total_tokens']),
         compactionMode: _stringOrNull(json['compaction_mode']),
         compactionThreshold: _intOrNull(json['compaction_threshold']),

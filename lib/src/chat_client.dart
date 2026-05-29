@@ -11,19 +11,38 @@ import 'agent_messages.dart';
 
 class AgentMessageEvent {
   AgentMessageEvent({
-    required this.message,
+    required AgentMessage message,
     DateTime? createdAt,
     this.attachment,
-  }) : createdAt = (createdAt ?? message.createdAtUtc).toUtc();
+  }) : _message = message,
+       createdAt = (createdAt ?? message.createdAtUtc).toUtc();
 
-  final AgentMessage message;
+  AgentMessage _message;
   final DateTime createdAt;
   final Uint8List? attachment;
+  final List<void Function()> _listeners = <void Function()>[];
+
+  AgentMessage get message => _message;
 
   AgentPayload get payload {
     final json = message.toJson();
     json['created_at'] = createdAt.toIso8601String();
     return json;
+  }
+
+  void addEventListener(void Function() listener) {
+    _listeners.add(listener);
+  }
+
+  void removeEventListener(void Function() listener) {
+    _listeners.remove(listener);
+  }
+
+  void replaceMessage(AgentMessage message) {
+    _message = message;
+    for (final listener in List<void Function()>.of(_listeners)) {
+      listener();
+    }
   }
 }
 
@@ -67,7 +86,7 @@ class PendingAgentInput {
 }
 
 DateTime? _createdAtFromPayload(Map<String, dynamic> payload) {
-  final value = payload['created_at'] ?? payload['timestamp'];
+  final value = payload['created_at'];
   if (value is DateTime) {
     return value.toUtc();
   }
@@ -131,6 +150,8 @@ abstract class BaseChatClient extends ChangeEmitter {
       <String, ChatThreadSession>{};
   final Map<String, Completer<AgentMessage>> _pendingStartRequests =
       <String, Completer<AgentMessage>>{};
+  final Map<String, List<AgentMessageEvent>> _pendingSessionEventsByPath =
+      <String, List<AgentMessageEvent>>{};
   final StreamController<AgentMessageEvent> _events =
       StreamController<AgentMessageEvent>.broadcast();
   AgentConnectionStatus? _connectionStatus;
@@ -248,6 +269,7 @@ abstract class BaseChatClient extends ChangeEmitter {
       if (!omitContent) {
         session.addAgentMessage(AgentMessageEvent(message: payload));
       }
+      _drainPendingSessionEvents(threadPath, session);
       final realtimeConnection = response is ThreadStarted
           ? response.realtimeConnection?.toJson()
           : null;
@@ -311,14 +333,32 @@ abstract class BaseChatClient extends ChangeEmitter {
       return;
     }
     final session = _sessionsByPath[threadPath];
-    session?.addAgentMessage(
-      AgentMessageEvent(
-        message: message,
-        createdAt: createdAt,
-        attachment: attachment,
-      ),
+    final event = AgentMessageEvent(
+      message: message,
+      createdAt: createdAt,
+      attachment: attachment,
     );
+    if (session != null) {
+      session.addAgentMessage(event);
+    } else {
+      (_pendingSessionEventsByPath[threadPath] ??= <AgentMessageEvent>[]).add(
+        event,
+      );
+    }
     notifyListeners();
+  }
+
+  void _drainPendingSessionEvents(
+    String threadPath,
+    ChatThreadSession session,
+  ) {
+    final pending = _pendingSessionEventsByPath.remove(threadPath);
+    if (pending == null) {
+      return;
+    }
+    for (final event in pending) {
+      session.addAgentMessage(event);
+    }
   }
 
   void emitConnectionStatus({
@@ -518,14 +558,19 @@ class MessagingChatClient extends BaseChatClient {
         event.message.type != agentRoomMessageType) {
       return;
     }
-    final participant = agentParticipant();
-    if (participant == null ||
-        event.message.fromParticipantId != participant.id) {
-      return;
-    }
     final message = event.message.message;
     final rawPayload = message['type'] is String ? message : message['payload'];
     if (rawPayload is Map<String, dynamic>) {
+      final participant = agentParticipant();
+      final fromSelectedAgent =
+          participant != null &&
+          event.message.fromParticipantId == participant.id;
+      final fromParticipantlessThreadList =
+          event.message.fromParticipantId.trim().isEmpty &&
+          _isThreadListPayload(rawPayload);
+      if (!fromSelectedAgent && !fromParticipantlessThreadList) {
+        return;
+      }
       handleAgentMessage(
         AgentMessage.fromJson(rawPayload),
         createdAt: _createdAtFromPayload(rawPayload),
@@ -533,6 +578,16 @@ class MessagingChatClient extends BaseChatClient {
       );
     } else if (rawPayload is Map) {
       final payload = Map<String, dynamic>.from(rawPayload);
+      final participant = agentParticipant();
+      final fromSelectedAgent =
+          participant != null &&
+          event.message.fromParticipantId == participant.id;
+      final fromParticipantlessThreadList =
+          event.message.fromParticipantId.trim().isEmpty &&
+          _isThreadListPayload(payload);
+      if (!fromSelectedAgent && !fromParticipantlessThreadList) {
+        return;
+      }
       handleAgentMessage(
         AgentMessage.fromJson(payload),
         createdAt: _createdAtFromPayload(payload),
@@ -540,6 +595,14 @@ class MessagingChatClient extends BaseChatClient {
       );
     }
   }
+}
+
+bool _isThreadListPayload(Map<String, dynamic> payload) {
+  final type = payload['type'];
+  return type == agentThreadListedType ||
+      type == agentThreadCreatedType ||
+      type == agentThreadUpdatedType ||
+      type == agentThreadDeletedType;
 }
 
 class WebSocketChatClient extends BaseChatClient {
@@ -856,6 +919,10 @@ class ChatThreadSession extends ChangeEmitter {
   final BaseChatClient _client;
   final String threadPath;
   final List<AgentMessageEvent> _messages = <AgentMessageEvent>[];
+  final Map<String, int> _messageIndexes = <String, int>{};
+  final Set<String> _localAgentMessageIds = <String>{};
+  final Set<String> _pendingLocalInputMessageIds = <String>{};
+  final Set<String> _mergedDeltaMessageIds = <String>{};
   final Map<String, PendingAgentInput> _pendingInputs =
       <String, PendingAgentInput>{};
   bool _open = false;
@@ -893,7 +960,6 @@ class ChatThreadSession extends ChangeEmitter {
           await requestModels(ignoreOffline: true);
         } catch (error) {
           _setLoadState(_failedLoadState(error));
-          rethrow;
         }
       }
       return;
@@ -915,7 +981,6 @@ class ChatThreadSession extends ChangeEmitter {
       await requestModels(ignoreOffline: true);
     } catch (error) {
       _setLoadState(_failedLoadState(error));
-      rethrow;
     }
   }
 
@@ -1119,14 +1184,15 @@ class ChatThreadSession extends ChangeEmitter {
   }
 
   void addAgentMessage(AgentMessageEvent event) {
-    _messages.add(event);
     final message = event.message;
     final type = message.type;
     _lastAgentMessageType = type;
     _lastAgentMessageAt = DateTime.now().toUtc();
     final messageId = message.messageId;
     final sourceMessageId = _sourceMessageId(message);
-    if (type == agentTurnStartType || type == agentTurnSteerType) {
+    if (type == agentThreadStartType ||
+        type == agentTurnStartType ||
+        type == agentTurnSteerType) {
       final normalizedMessageId = messageId.trim();
       if (normalizedMessageId.isNotEmpty) {
         _markPending(
@@ -1140,6 +1206,7 @@ class ChatThreadSession extends ChangeEmitter {
             awaitingApplication: true,
           ),
         );
+        _localAgentMessageIds.add(normalizedMessageId);
       }
     } else if (type == agentTurnStartAcceptedType ||
         type == agentTurnSteerAcceptedType) {
@@ -1150,11 +1217,19 @@ class ChatThreadSession extends ChangeEmitter {
       );
     } else if (type == agentTurnStartedType || type == agentTurnSteeredType) {
       _pendingInputs.remove(sourceMessageId);
-    } else if (type == agentTurnStartRejectedType ||
+      if (sourceMessageId != null) {
+        _pendingLocalInputMessageIds.remove(sourceMessageId);
+      }
+    } else if (type == agentThreadStartRejectedType ||
+        type == agentTurnStartRejectedType ||
         type == agentTurnSteerRejectedType) {
       _pendingInputs.remove(sourceMessageId);
+      if (sourceMessageId != null) {
+        _pendingLocalInputMessageIds.remove(sourceMessageId);
+      }
     } else if (type == agentTurnEndedType || type == agentThreadClearedType) {
       _pendingInputs.clear();
+      _pendingLocalInputMessageIds.clear();
       if (message is TurnEnded && message.turnId.trim().isNotEmpty) {
         _lastCompletedTurnId = message.turnId.trim();
       }
@@ -1172,7 +1247,116 @@ class ChatThreadSession extends ChangeEmitter {
         notify: false,
       );
     }
+    _appendRenderableMessage(event);
     notifyListeners();
+  }
+
+  void _appendRenderableMessage(AgentMessageEvent event) {
+    final message = event.message;
+    if (message is TurnEnded) {
+      _appendMessage(event);
+      return;
+    }
+    if (message is StartThread ||
+        message is TurnStart ||
+        message is TurnSteer) {
+      if (_agentInputText(_messageContent(message)).trim().isNotEmpty) {
+        _appendMessage(event);
+        final normalizedMessageId = message.messageId.trim();
+        if (normalizedMessageId.isNotEmpty) {
+          _pendingLocalInputMessageIds.add(normalizedMessageId);
+        }
+      }
+      return;
+    }
+    if (message is TurnStartAccepted) {
+      final normalizedSourceMessageId = message.sourceMessageId.trim();
+      if (normalizedSourceMessageId.isNotEmpty &&
+          _localAgentMessageIds.contains(normalizedSourceMessageId)) {
+        _pendingLocalInputMessageIds.remove(normalizedSourceMessageId);
+        return;
+      }
+      if (_agentInputText(message.content).trim().isNotEmpty) {
+        _appendMessage(event, beforePendingLocalInputs: true);
+      }
+      return;
+    }
+    if (_isMergeableDelta(message)) {
+      _appendOrMergeDelta(event);
+      return;
+    }
+    if (message is AgentImageGenerationPartial ||
+        message is AgentImageGenerationCompleted) {
+      _appendMessage(event);
+      return;
+    }
+    if (message is AgentClientToolCallRequested) {
+      _appendMessage(event);
+      return;
+    }
+    if (message is AgentConnectionStatus || message is AgentThreadMessage) {
+      _appendMessage(event);
+    }
+  }
+
+  void _appendMessage(
+    AgentMessageEvent event, {
+    bool beforePendingLocalInputs = false,
+  }) {
+    final normalizedMessageId = _normalizedString(event.message.messageId);
+    if (normalizedMessageId == null ||
+        _messageIndexes.containsKey(normalizedMessageId)) {
+      return;
+    }
+    if (beforePendingLocalInputs) {
+      final insertIndex = _messages.indexWhere(
+        (existing) =>
+            _pendingLocalInputMessageIds.contains(existing.message.messageId),
+      );
+      if (insertIndex >= 0) {
+        _messages.insert(insertIndex, event);
+        _indexMessagesFrom(insertIndex);
+        return;
+      }
+    }
+    _messageIndexes[normalizedMessageId] = _messages.length;
+    _messages.add(event);
+  }
+
+  void _appendOrMergeDelta(AgentMessageEvent event) {
+    final message = event.message;
+    final normalizedMessageId = _normalizedString(message.messageId);
+    if (normalizedMessageId != null) {
+      if (_mergedDeltaMessageIds.contains(normalizedMessageId)) {
+        return;
+      }
+      _mergedDeltaMessageIds.add(normalizedMessageId);
+    }
+    final itemId = _deltaItemId(message);
+    if (itemId == null) {
+      return;
+    }
+    final key = '${message.type}:$itemId';
+    final existingIndex = _messageIndexes[key];
+    if (existingIndex == null) {
+      _messageIndexes[key] = _messages.length;
+      _messages.add(event);
+      return;
+    }
+    final existing = _messages[existingIndex].message;
+    final merged = _mergeDeltaMessage(existing, message);
+    if (merged != null) {
+      _messages[existingIndex].replaceMessage(merged);
+    }
+  }
+
+  void _indexMessagesFrom(int start) {
+    for (var index = start < 0 ? 0 : start; index < _messages.length; index++) {
+      final key = _messageIndexKey(_messages[index].message);
+      if (key != null) {
+        _messageIndexes[key] = index;
+      }
+    }
   }
 
   void _markClosed({bool notify = true}) {
@@ -1248,6 +1432,116 @@ class ChatThreadSession extends ChangeEmitter {
       awaitingOnline: awaitingOnline,
     );
   }
+}
+
+String? _normalizedString(String? value) {
+  final normalized = value?.trim();
+  return normalized == null || normalized.isEmpty ? null : normalized;
+}
+
+List<AgentInputContent> _messageContent(AgentMessage message) {
+  if (message is StartThread) {
+    return message.content ?? const <AgentInputContent>[];
+  }
+  if (message is TurnStart) {
+    return message.content;
+  }
+  if (message is TurnSteer) {
+    return message.content;
+  }
+  return const <AgentInputContent>[];
+}
+
+String _agentInputText(List<AgentInputContent> content) {
+  return content
+      .whereType<AgentTextContent>()
+      .map((entry) => entry.text)
+      .join('\n');
+}
+
+String? _deltaItemId(AgentMessage message) {
+  if (message is AgentAudioGenerationDelta) {
+    return _normalizedString(message.itemId);
+  }
+  if (message is AgentAudioTranscriptionDelta) {
+    return _normalizedString(message.itemId);
+  }
+  if (message is AgentFileContentDelta) {
+    return _normalizedString(message.itemId);
+  }
+  if (message is AgentReasoningContentDelta) {
+    return _normalizedString(message.itemId);
+  }
+  if (message is AgentTextContentDelta) {
+    return _normalizedString(message.itemId);
+  }
+  if (message is AgentToolCallArgumentsDelta) {
+    return _normalizedString(message.itemId);
+  }
+  if (message is AgentToolCallLogDelta) {
+    return _normalizedString(message.itemId);
+  }
+  return null;
+}
+
+bool _isMergeableDelta(AgentMessage message) => _deltaItemId(message) != null;
+
+String? _messageIndexKey(AgentMessage message) {
+  if (_isMergeableDelta(message)) {
+    final itemId = _deltaItemId(message);
+    return itemId == null ? null : '${message.type}:$itemId';
+  }
+  return _normalizedString(message.messageId);
+}
+
+AgentMessage? _mergeDeltaMessage(AgentMessage existing, AgentMessage incoming) {
+  if (existing is AgentAudioGenerationDelta &&
+      incoming is AgentAudioGenerationDelta) {
+    return AgentMessage.fromJson(<String, dynamic>{
+      ...existing.toJson(),
+      'data': Uint8List.fromList(<int>[...existing.data, ...incoming.data]),
+    });
+  }
+  if (existing is AgentAudioTranscriptionDelta &&
+      incoming is AgentAudioTranscriptionDelta) {
+    return AgentMessage.fromJson(<String, dynamic>{
+      ...existing.toJson(),
+      'text': '${existing.text}${incoming.text}',
+    });
+  }
+  if (existing is AgentFileContentDelta && incoming is AgentFileContentDelta) {
+    return incoming;
+  }
+  if (existing is AgentReasoningContentDelta &&
+      incoming is AgentReasoningContentDelta) {
+    return AgentMessage.fromJson(<String, dynamic>{
+      ...existing.toJson(),
+      'text': '${existing.text}${incoming.text}',
+    });
+  }
+  if (existing is AgentTextContentDelta && incoming is AgentTextContentDelta) {
+    return AgentMessage.fromJson(<String, dynamic>{
+      ...existing.toJson(),
+      'text': '${existing.text}${incoming.text}',
+    });
+  }
+  if (existing is AgentToolCallArgumentsDelta &&
+      incoming is AgentToolCallArgumentsDelta) {
+    return AgentMessage.fromJson(<String, dynamic>{
+      ...existing.toJson(),
+      'delta': '${existing.delta}${incoming.delta}',
+    });
+  }
+  if (existing is AgentToolCallLogDelta && incoming is AgentToolCallLogDelta) {
+    return AgentMessage.fromJson(<String, dynamic>{
+      ...existing.toJson(),
+      'lines': <Map<String, dynamic>>[
+        ...existing.lines.map((entry) => entry.toJson()),
+        ...incoming.lines.map((entry) => entry.toJson()),
+      ],
+    });
+  }
+  return null;
 }
 
 String? _sourceMessageId(AgentMessage message) {
