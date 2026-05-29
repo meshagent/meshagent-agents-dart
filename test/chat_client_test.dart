@@ -2,9 +2,25 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:meshagent/meshagent.dart';
 import 'package:meshagent_agents/meshagent_agents.dart';
 import 'package:msgpack_dart/msgpack_dart.dart' as msgpack;
 import 'package:test/test.dart';
+
+class _NoopProtocolChannel extends ProtocolChannel {
+  @override
+  void dispose() {}
+
+  @override
+  Future<void> sendData(Uint8List data) async {}
+
+  @override
+  void start(
+    void Function(Uint8List data) onDataReceived, {
+    void Function()? onDone,
+    void Function(Object? error)? onError,
+  }) {}
+}
 
 class _FakeChatClient extends BaseChatClient {
   _FakeChatClient({this.participantName});
@@ -82,6 +98,27 @@ void main() {
     expect(usage.contextWindow.usedTokens, 0);
     expect(usage.contextWindow.totalTokens, 128000);
   });
+
+  test(
+    'messaging client ignores optional sends while agent is offline',
+    () async {
+      final room = RoomClient(
+        protocolFactory: Protocol.createFactory(
+          channel: _NoopProtocolChannel(),
+        ),
+      );
+      final client = MessagingChatClient(room: room, agentName: 'assistant');
+      addTearDown(client.stop);
+      addTearDown(room.dispose);
+
+      await client
+          .sendAgentMessage(
+            ModelsRequest(messageId: 'models-1'),
+            ignoreOffline: true,
+          )
+          .timeout(const Duration(milliseconds: 100));
+    },
+  );
 
   test('thread sessions record failed turn ends for rendering', () {
     final client = _FakeChatClient();

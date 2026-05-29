@@ -492,8 +492,12 @@ class MessagingChatClient extends BaseChatClient {
     bool ignoreOffline = false,
   }) async {
     await start();
+    final existingParticipant = agentParticipant();
+    if (existingParticipant == null && ignoreOffline) {
+      return;
+    }
     final participant =
-        agentParticipant() ??
+        existingParticipant ??
         await waitForAgentParticipant(waitKey: message.messageId);
     await room.messaging.sendMessage(
       to: participant,
