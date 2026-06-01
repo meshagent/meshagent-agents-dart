@@ -68,6 +68,171 @@ void main() {
     expect(parsed.toJson()['created_at'], '2026-05-28T16:11:48.538Z');
   });
 
+  test(
+    'thread replay uses event metadata timestamps when payload has no created_at',
+    () {
+      final client = _FakeChatClient();
+      final session = client.openThread(
+        'dataset://threads/example',
+        load: false,
+      );
+      final turnStartedAt = DateTime.utc(2026, 5, 28, 16, 11, 48, 538);
+      final textStartedAt = DateTime.utc(2026, 5, 28, 16, 11, 52, 425);
+
+      final turn = TurnStart(
+        threadId: session.threadPath,
+        messageId: 'message-1',
+        content: agentInputContent(
+          text: 'loaded question',
+          attachments: const <AgentFileContent>[],
+        ),
+      );
+      final text = AgentTextContentDelta(
+        threadId: session.threadPath,
+        turnId: 'turn-1',
+        itemId: 'assistant-1',
+        text: 'loaded answer',
+      );
+
+      expect(
+        turn.toJson()['created_at'],
+        isNot(turnStartedAt.toIso8601String()),
+      );
+      expect(
+        text.toJson()['created_at'],
+        isNot(textStartedAt.toIso8601String()),
+      );
+
+      client.handleAgentMessage(turn, createdAt: turnStartedAt);
+      client.handleAgentMessage(text, createdAt: textStartedAt);
+      client.handleAgentMessage(ThreadLoaded(threadId: session.threadPath));
+
+      expect(session.messages[0].createdAt, turnStartedAt);
+      expect(
+        session.messages[0].payload['created_at'],
+        turnStartedAt.toIso8601String(),
+      );
+      expect(session.pendingInputs.single.createdAt, turnStartedAt);
+      expect(session.messages[1].createdAt, textStartedAt);
+      expect(
+        session.messages[1].payload['created_at'],
+        textStartedAt.toIso8601String(),
+      );
+    },
+  );
+
+  test(
+    'replayed tool call events use event metadata timestamps when payload has no created_at',
+    () {
+      final replayedAt = DateTime.utc(2026, 5, 28, 23, 58, 32, 425);
+      final message = AgentToolCallStarted(
+        threadId: 'dataset://threads/example',
+        turnId: 'turn-1',
+        itemId: 'tool-1',
+        toolkit: 'client',
+        tool: 'ask_user',
+        arguments: const <String, Object?>{'prompt': 'connected?'},
+      );
+      final event = AgentMessageEvent(message: message, createdAt: replayedAt);
+
+      expect(
+        message.toJson()['created_at'],
+        isNot(replayedAt.toIso8601String()),
+      );
+      expect(event.createdAt, replayedAt);
+      expect(event.payload['created_at'], replayedAt.toIso8601String());
+    },
+  );
+
+  test(
+    'thread sessions use incoming event time for pending input timestamps',
+    () {
+      final client = _FakeChatClient();
+      final session = client.openThread(
+        'dataset://threads/example',
+        load: false,
+      );
+      final createdAt = DateTime.utc(2026, 5, 28, 16, 11, 48, 538);
+
+      session.addAgentMessage(
+        AgentMessageEvent(
+          message: TurnStart(
+            threadId: session.threadPath,
+            messageId: 'message-1',
+            content: agentInputContent(
+              text: 'loaded question',
+              attachments: const <AgentFileContent>[],
+            ),
+          ),
+          createdAt: createdAt,
+        ),
+      );
+
+      expect(session.pendingInputs.single.createdAt, createdAt);
+      expect(session.messages.single.createdAt, createdAt);
+    },
+  );
+
+  test('reloading an open thread clears stale order before replay', () async {
+    final client = _FakeChatClient();
+    final session = client.openThread('dataset://threads/example', load: false);
+    session.addAgentMessage(
+      AgentMessageEvent(
+        message: AgentTextContentDelta(
+          threadId: session.threadPath,
+          turnId: 'turn-1',
+          itemId: 'assistant-1',
+          text: 'old assistant first',
+        ),
+        createdAt: DateTime.utc(2026, 5, 28, 16, 12),
+      ),
+    );
+    session.addAgentMessage(
+      AgentMessageEvent(
+        message: TurnStart(
+          threadId: session.threadPath,
+          messageId: 'user-1',
+          content: agentInputContent(
+            text: 'old user second',
+            attachments: const <AgentFileContent>[],
+          ),
+        ),
+        createdAt: DateTime.utc(2026, 5, 28, 16, 11),
+      ),
+    );
+
+    client.openThread(session.threadPath, reloadIfOpen: true);
+    await Future<void>.delayed(Duration.zero);
+    expect(session.messages, isEmpty);
+
+    client.handleAgentMessage(
+      TurnStart(
+        threadId: session.threadPath,
+        messageId: 'user-1',
+        content: agentInputContent(
+          text: 'loaded user',
+          attachments: const <AgentFileContent>[],
+        ),
+      ),
+      createdAt: DateTime.utc(2026, 5, 28, 16, 11),
+    );
+    client.handleAgentMessage(
+      AgentTextContentDelta(
+        threadId: session.threadPath,
+        turnId: 'turn-1',
+        itemId: 'assistant-1',
+        text: 'loaded assistant',
+      ),
+      createdAt: DateTime.utc(2026, 5, 28, 16, 12),
+    );
+    client.handleAgentMessage(ThreadLoaded(threadId: session.threadPath));
+
+    expect(session.messages[0].message, isA<TurnStart>());
+    expect(session.messages[0].createdAt, DateTime.utc(2026, 5, 28, 16, 11));
+    expect(session.messages[1].message, isA<AgentTextContentDelta>());
+    expect(session.messages[1].createdAt, DateTime.utc(2026, 5, 28, 16, 12));
+  });
+
   test('usage updates tolerate missing context window token counts', () {
     final parsed = AgentMessage.fromJson({
       'type': agentUsageUpdatedType,

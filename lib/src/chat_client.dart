@@ -949,6 +949,9 @@ class ChatThreadSession extends ChangeEmitter {
   Future<void> open({bool load = true, String? sinceTurn}) async {
     if (_open) {
       if (load) {
+        if (sinceTurn == null) {
+          _resetReplayState();
+        }
         final openThread = OpenThread(
           threadId: threadPath,
           load: true,
@@ -982,6 +985,18 @@ class ChatThreadSession extends ChangeEmitter {
     } catch (error) {
       _setLoadState(_failedLoadState(error));
     }
+  }
+
+  void _resetReplayState() {
+    _messages.clear();
+    _messageIndexes.clear();
+    _localAgentMessageIds.clear();
+    _pendingLocalInputMessageIds.clear();
+    _mergedDeltaMessageIds.clear();
+    _pendingInputs.clear();
+    _lastCompletedTurnId = null;
+    _lastAgentMessageType = null;
+    _lastAgentMessageAt = null;
   }
 
   Future<void> close() async {
@@ -1105,7 +1120,7 @@ class ChatThreadSession extends ChangeEmitter {
         messageType: payload.type,
         threadPath: threadPath,
         payload: payload,
-        createdAt: DateTime.now().toUtc(),
+        createdAt: payload.createdAtUtc,
         awaitingAcceptance: true,
         awaitingApplication: true,
       ),
@@ -1187,7 +1202,7 @@ class ChatThreadSession extends ChangeEmitter {
     final message = event.message;
     final type = message.type;
     _lastAgentMessageType = type;
-    _lastAgentMessageAt = DateTime.now().toUtc();
+    _lastAgentMessageAt = event.createdAt;
     final messageId = message.messageId;
     final sourceMessageId = _sourceMessageId(message);
     if (type == agentThreadStartType ||
@@ -1201,7 +1216,7 @@ class ChatThreadSession extends ChangeEmitter {
             messageType: type,
             threadPath: threadPath,
             payload: message,
-            createdAt: DateTime.now().toUtc(),
+            createdAt: event.createdAt,
             awaitingAcceptance: true,
             awaitingApplication: true,
           ),
