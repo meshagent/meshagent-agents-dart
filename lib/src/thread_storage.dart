@@ -478,6 +478,12 @@ class AgentThreadStorageRepository extends ThreadStorageRepository {
 
   void _handleEvent(AgentMessageEvent event) {
     final message = event.message;
+    if (message is AgentConnectionStatus) {
+      if (message.status.trim().toLowerCase() == 'reconnected') {
+        unawaited(_reconnectWatch());
+      }
+      return;
+    }
     if (message is ThreadsListed) {
       _handleThreadsListed(message);
       return;
@@ -496,6 +502,14 @@ class AgentThreadStorageRepository extends ThreadStorageRepository {
         notifyListeners();
       }
     }
+  }
+
+  Future<void> _reconnectWatch() async {
+    if (_closed) {
+      return;
+    }
+    await chatClient.sendAgentMessage(WatchThreads(), ignoreOffline: true);
+    await _requestList();
   }
 
   void _handleThreadsListed(ThreadsListed message) {

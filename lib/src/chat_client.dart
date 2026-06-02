@@ -326,17 +326,6 @@ abstract class BaseChatClient extends ChangeEmitter {
   }) {
     if (message is AgentConnectionStatus) {
       _connectionStatus = message;
-      for (final session in _sessionsByPath.values) {
-        if (session.isOpen) {
-          session.addAgentMessage(
-            AgentMessageEvent(
-              message: message,
-              createdAt: createdAt,
-              attachment: attachment,
-            ),
-          );
-        }
-      }
     }
     _events.add(
       AgentMessageEvent(
@@ -406,11 +395,6 @@ abstract class BaseChatClient extends ChangeEmitter {
     );
     _connectionStatus = event;
     _events.add(AgentMessageEvent(message: event));
-    for (final session in _sessionsByPath.values) {
-      if (session.isOpen) {
-        session.addAgentMessage(AgentMessageEvent(message: event));
-      }
-    }
     notifyListeners();
   }
 
@@ -426,8 +410,7 @@ abstract class BaseChatClient extends ChangeEmitter {
 
 class MessagingChatClient extends BaseChatClient {
   MessagingChatClient({required this.room, this.agentName}) {
-    _roomSubscription = room.listen(_onRoomEvent);
-    room.messaging.addListener(_onMessagingChanged);
+    _attachListeners();
   }
 
   final RoomClient room;
@@ -437,6 +420,9 @@ class MessagingChatClient extends BaseChatClient {
       <String, Completer<RemoteParticipant>>{};
   bool _started = false;
   String? _agentParticipantId;
+  bool _hasConnected = false;
+  bool _waitingForParticipant = false;
+  bool _messagingListenerAttached = false;
 
   @override
   String? localParticipantName() {
@@ -450,8 +436,11 @@ class MessagingChatClient extends BaseChatClient {
       return;
     }
     _started = true;
+    _attachListeners();
     room.messaging.start();
     await room.messaging.enable();
+    _waitingForParticipant = true;
+    _onMessagingChanged();
   }
 
   @override
@@ -459,7 +448,7 @@ class MessagingChatClient extends BaseChatClient {
     _started = false;
     await _roomSubscription?.cancel();
     _roomSubscription = null;
-    room.messaging.removeListener(_onMessagingChanged);
+    _detachMessagingListener();
     for (final wait in _pendingParticipantWaits.values) {
       if (!wait.isCompleted) {
         wait.completeError(
@@ -480,6 +469,22 @@ class MessagingChatClient extends BaseChatClient {
     }
   }
 
+  void _attachListeners() {
+    _roomSubscription ??= room.listen(_onRoomEvent);
+    if (!_messagingListenerAttached) {
+      room.messaging.addListener(_onMessagingChanged);
+      _messagingListenerAttached = true;
+    }
+  }
+
+  void _detachMessagingListener() {
+    if (!_messagingListenerAttached) {
+      return;
+    }
+    room.messaging.removeListener(_onMessagingChanged);
+    _messagingListenerAttached = false;
+  }
+
   @override
   RemoteParticipant? agentParticipant() {
     final normalizedAgentName = agentName?.trim();
@@ -488,6 +493,9 @@ class MessagingChatClient extends BaseChatClient {
           normalizedAgentName.isNotEmpty &&
           participant.getAttribute('name') != normalizedAgentName) {
         continue;
+      }
+      if (normalizedAgentName != null && normalizedAgentName.isNotEmpty) {
+        return participant;
       }
       if (participant.getAttribute('supports_agent_messages') == true) {
         return participant;
@@ -543,17 +551,37 @@ class MessagingChatClient extends BaseChatClient {
     if (participantId != _agentParticipantId) {
       if (participantId == null) {
         if (_agentParticipantId != null) {
+          _waitingForParticipant = true;
           emitConnectionStatus(
             status: 'disconnected',
             message: 'Agent messaging disconnected',
             reason: 'participant_disconnected',
           );
+          emitConnectionStatus(
+            status: 'reconnecting',
+            message: 'Waiting for agent messaging',
+            reason: 'participant_disconnected',
+          );
+        } else if (_started && _waitingForParticipant) {
+          emitConnectionStatus(
+            status: 'reconnecting',
+            message: 'Waiting for agent messaging',
+            reason: 'participant_offline',
+          );
         }
       } else {
+        final status = _hasConnected ? 'reconnected' : 'connected';
+        _hasConnected = true;
+        _waitingForParticipant = false;
         emitConnectionStatus(
-          status: 'connected',
-          message: 'Agent messaging connected',
+          status: status,
+          message: status == 'reconnected'
+              ? 'Agent messaging reconnected'
+              : 'Agent messaging connected',
         );
+        if (status == 'reconnected') {
+          unawaited(_reopenOpenSessions());
+        }
       }
       _agentParticipantId = participantId;
     }
@@ -571,18 +599,18 @@ class MessagingChatClient extends BaseChatClient {
     if (event is RoomStatusEvent) {
       final status = event.status.trim().toLowerCase();
       if (status == 'connected' || status == 'reconnected') {
-        emitConnectionStatus(
-          status: status,
-          message: event.message.trim().isNotEmpty
-              ? event.message
-              : 'Room connection restored',
-        );
+        _waitingForParticipant = true;
+        _onMessagingChanged();
       } else if (status == 'disconnected' || status == 'reconnecting') {
+        _agentParticipantId = null;
+        _waitingForParticipant = true;
         emitConnectionStatus(
-          status: status,
+          status: status == 'disconnected' ? 'disconnected' : 'reconnecting',
           message: event.message.trim().isNotEmpty
               ? event.message
-              : 'Room connection lost',
+              : (status == 'disconnected'
+                    ? 'Agent messaging disconnected'
+                    : 'Waiting for agent messaging'),
         );
       }
       return;
@@ -626,6 +654,15 @@ class MessagingChatClient extends BaseChatClient {
         createdAt: _createdAtFromPayload(payload),
         attachment: event.message.attachment,
       );
+    }
+  }
+
+  Future<void> _reopenOpenSessions() async {
+    for (final session in sessions) {
+      if (!session.isOpen) {
+        continue;
+      }
+      await session.open(load: true, sinceTurn: session.lastCompletedTurnId);
     }
   }
 }

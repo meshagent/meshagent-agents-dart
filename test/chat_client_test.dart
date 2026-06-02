@@ -1254,6 +1254,14 @@ void main() {
     });
 
     await client.start();
+    final clientEvents = <AgentConnectionStatus>[];
+    final clientEventSubscription = client.events.listen((event) {
+      final message = event.message;
+      if (message is AgentConnectionStatus) {
+        clientEvents.add(message);
+      }
+    });
+    addTearDown(clientEventSubscription.cancel);
     final session = client.openThread('dataset://threads/reconnect');
     final firstSocket = await waitForSocket(0);
     await waitForPayload(firstSocket, agentThreadOpenType);
@@ -1265,11 +1273,11 @@ void main() {
     await firstSocket.close(WebSocketStatus.goingAway, 'test reconnect');
 
     await _waitFor(
-      () => session.messages.any(
-        (event) =>
-            event.message is AgentConnectionStatus &&
-            (event.message as AgentConnectionStatus).status == 'reconnecting',
-      ),
+      () => clientEvents.any((event) => event.status == 'reconnecting'),
+    );
+    expect(
+      session.messages.where((event) => event.message is AgentConnectionStatus),
+      isEmpty,
     );
     final secondSocket = await waitForSocket(1);
     final reopened = await waitForPayload(secondSocket, agentThreadOpenType);
@@ -1289,11 +1297,11 @@ void main() {
     expect(session.isLoading, isFalse);
     expect(session.loadState.phase, ChatThreadSessionLoadPhase.loaded);
     await _waitFor(
-      () => session.messages.any(
-        (event) =>
-            event.message is AgentConnectionStatus &&
-            (event.message as AgentConnectionStatus).status == 'reconnected',
-      ),
+      () => clientEvents.any((event) => event.status == 'reconnected'),
+    );
+    expect(
+      session.messages.where((event) => event.message is AgentConnectionStatus),
+      isEmpty,
     );
   });
 
