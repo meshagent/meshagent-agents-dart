@@ -356,10 +356,11 @@ void main() {
         'url': 'wss://example.invalid/session',
         'headers': {'authorization': 'Bearer token-1'},
       });
-      expect(
-        result.session.messages.single.payload['type'],
-        agentThreadStartType,
-      );
+      final localStart = result.session.messages.single.message;
+      expect(localStart, isA<TurnStart>());
+      expect((localStart as TurnStart).threadId, result.threadPath);
+      expect(localStart.messageId, startMessage.payload['message_id']);
+      expect(jsonEncode(localStart.content), contains('hello there'));
 
       final open = await harness.nextAgentMessageOfType(agentThreadOpenType);
       expect(open.payload['thread_id'], result.threadPath);
