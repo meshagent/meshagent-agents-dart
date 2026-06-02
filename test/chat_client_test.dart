@@ -68,6 +68,25 @@ void main() {
     expect(parsed.toJson()['created_at'], '2026-05-28T16:11:48.538Z');
   });
 
+  test('agent message parsing preserves metadata', () {
+    final parsed = AgentMessage.fromJson({
+      'type': agentReasoningContentEndedType,
+      'message_id': 'event-1',
+      'thread_id': 'dataset://threads/example',
+      'turn_id': 'turn-1',
+      'item_id': 'rs-1',
+      'content': '',
+      'metadata': {
+        'openai': {'encrypted_content': 'opaque'},
+      },
+    });
+
+    expect(parsed.metadata['openai'], {'encrypted_content': 'opaque'});
+    expect(parsed.toJson()['metadata'], {
+      'openai': {'encrypted_content': 'opaque'},
+    });
+  });
+
   test(
     'thread replay uses event metadata timestamps when payload has no created_at',
     () {

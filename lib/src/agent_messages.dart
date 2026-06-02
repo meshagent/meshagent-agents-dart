@@ -128,19 +128,30 @@ abstract class AgentMessage {
     String? messageId,
     this.senderName,
     DateTime? createdAt,
+    Map<String, dynamic>? metadata,
   }) : messageId = messageId == null || messageId.trim().isEmpty
            ? const Uuid().v4()
            : messageId.trim(),
-       _createdAtUtc = (createdAt ?? DateTime.now().toUtc()).toUtc();
+       _createdAtUtc = (createdAt ?? DateTime.now().toUtc()).toUtc(),
+       _metadata = Map<String, dynamic>.unmodifiable(
+         metadata ?? const <String, dynamic>{},
+       );
 
   final String type;
   final String messageId;
   DateTime _createdAtUtc;
+  Map<String, dynamic> _metadata;
 
   DateTime get createdAtUtc => _createdAtUtc;
 
   void _setCreatedAtUtc(DateTime value) {
     _createdAtUtc = value.toUtc();
+  }
+
+  Map<String, dynamic> get metadata => _metadata;
+
+  void _setMetadata(Map<String, dynamic> value) {
+    _metadata = Map<String, dynamic>.unmodifiable(value);
   }
 
   /// Optional display name for the sender.
@@ -153,6 +164,7 @@ abstract class AgentMessage {
     'type': type,
     'message_id': messageId,
     'created_at': createdAtUtc.toIso8601String(),
+    if (metadata.isNotEmpty) 'metadata': metadata,
     if (senderName != null) 'sender_name': senderName,
   };
 
@@ -453,6 +465,10 @@ abstract class AgentMessage {
     }
     if (createdAt != null) {
       message._setCreatedAtUtc(createdAt);
+    }
+    final metadata = _dynamicMapOrNull(json['metadata']);
+    if (metadata != null) {
+      message._setMetadata(metadata);
     }
     return message;
   }
