@@ -10,6 +10,9 @@ import 'package:uuid/uuid.dart';
 const _secret = 'test-secret-secure-secret-sample2560binarykey';
 
 String? get _liveSkipReason {
+  if (Platform.environment['RUN_MESHAGENT_LIVE_ASSISTANT_TESTS'] != '1') {
+    return 'Set RUN_MESHAGENT_LIVE_ASSISTANT_TESTS=1 with a live assistant agent to run.';
+  }
   final missing = <String>[
     if ((Platform.environment['MESHAGENT_API_URL'] ?? '').isEmpty)
       'MESHAGENT_API_URL',

@@ -366,6 +366,34 @@ void main() {
     });
 
     test(
+      'ignoreOffline returns when no agent participant is present',
+      () async {
+        final suffix = const Uuid().v4();
+        final room = _newRoomClient(
+          roomName: 'dart-chat-offline-$suffix',
+          participantName: 'user',
+        );
+        final client = MessagingChatClient(
+          room: room,
+          agentName: 'missing-agent-$suffix',
+        );
+        addTearDown(() async {
+          await client.stop().catchError((_) {});
+          room.dispose();
+        });
+
+        await room.start();
+        room.messaging.start();
+        await room.messaging.enable();
+        await client.start();
+
+        await client
+            .sendAgentMessage(WatchThreads(), ignoreOffline: true)
+            .timeout(const Duration(milliseconds: 250));
+      },
+    );
+
+    test(
       'tracks pending text turns through acceptance and application',
       () async {
         final harness = await _ChatRoomHarness.start();
