@@ -267,7 +267,15 @@ abstract class BaseChatClient extends ChangeEmitter {
       }
       final session = openThread(threadPath, load: false);
       if (!omitContent) {
-        session.addAgentMessage(AgentMessageEvent(message: payload));
+        session.addAgentMessage(
+          AgentMessageEvent(
+            message: _resolvedStartThreadMessage(
+              payload: payload,
+              threadPath: threadPath,
+            ),
+            createdAt: payload.createdAtUtc,
+          ),
+        );
       }
       _drainPendingSessionEvents(threadPath, session);
       final realtimeConnection = response is ThreadStarted
@@ -281,6 +289,28 @@ abstract class BaseChatClient extends ChangeEmitter {
     } finally {
       _pendingStartRequests.remove(resolvedMessageId);
     }
+  }
+
+  TurnStart _resolvedStartThreadMessage({
+    required StartThread payload,
+    required String threadPath,
+  }) {
+    return TurnStart(
+      threadId: threadPath,
+      messageId: payload.messageId,
+      senderName: payload.senderName,
+      content: payload.content ?? <AgentInputContent>[],
+      backend: payload.backend,
+      provider: payload.provider,
+      model: payload.model,
+      voice: payload.voice,
+      outputModalities: payload.outputModalities,
+      instructions: payload.instructions,
+      mcp: payload.mcp,
+      clientToolkits: payload.clientToolkits,
+      toolkits: payload.toolkits,
+      toolChoice: payload.toolChoice,
+    );
   }
 
   Future<void> sendAgentMessage(
@@ -324,7 +354,6 @@ abstract class BaseChatClient extends ChangeEmitter {
         pending.complete(message);
       }
     }
-
     final threadPath = message is AgentThreadMessage
         ? message.threadId.trim()
         : null;

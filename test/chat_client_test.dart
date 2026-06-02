@@ -742,6 +742,7 @@ void main() {
     final startFuture = client.startThread(
       messageId: 'client-message-1',
       message: 'hello',
+      name: 'Created Thread',
       attachments: const <AgentFileContent>[],
     );
 
@@ -763,6 +764,13 @@ void main() {
     );
     expect(open.load, isFalse);
     expect(result.session.isLoading, isFalse);
+    expect(result.session.messages, hasLength(1));
+    final optimisticMessage = result.session.messages.single.message;
+    expect(optimisticMessage, isA<TurnStart>());
+    final optimisticTurnStart = optimisticMessage as TurnStart;
+    expect(optimisticTurnStart.threadId, result.threadPath);
+    expect(optimisticTurnStart.messageId, 'client-message-1');
+    expect(optimisticTurnStart.content.single.toJson()['text'], 'hello');
 
     expect(client.openThread(result.threadPath), same(result.session));
     await Future<void>.delayed(Duration.zero);
@@ -772,6 +780,44 @@ void main() {
       ),
       hasLength(1),
     );
+  });
+
+  test('startThread preserves a server-created thread event', () async {
+    final client = _FakeChatClient();
+    final events = <AgentMessageEvent>[];
+    final subscription = client.events.listen(events.add);
+    addTearDown(subscription.cancel);
+    final startFuture = client.startThread(
+      messageId: 'client-message-1',
+      message: 'hello',
+      attachments: const <AgentFileContent>[],
+    );
+
+    client.handleAgentMessage(
+      ThreadCreated(
+        thread: const AgentThreadListEntry(
+          path: 'dataset://threads/created',
+          name: 'Server Generated Name',
+          createdAt: '2026-05-28T23:00:00.000Z',
+          modifiedAt: '2026-05-28T23:00:00.000Z',
+        ),
+      ),
+    );
+    client.handleAgentMessage(
+      ThreadStarted(
+        sourceMessageId: 'client-message-1',
+        threadId: 'dataset://threads/created',
+      ),
+    );
+
+    final result = await startFuture;
+    expect(result.threadPath, 'dataset://threads/created');
+    final createdEvents = events
+        .map((event) => event.message)
+        .whereType<ThreadCreated>()
+        .toList();
+    expect(createdEvents, hasLength(1));
+    expect(createdEvents.single.thread.name, 'Server Generated Name');
   });
 
   test(
@@ -871,9 +917,10 @@ void main() {
       expect(result.threadPath, 'dataset://threads/created');
       final localThreadStart = result.session.messages
           .map((event) => event.message)
-          .whereType<StartThread>()
+          .whereType<TurnStart>()
           .single;
       expect(localThreadStart.messageId, 'client-message-1');
+      expect(localThreadStart.threadId, result.threadPath);
       expect(localThreadStart.content, isNotEmpty);
       expect(localThreadStart.clientToolkits, hasLength(1));
       expect(localThreadStart.clientToolkits!.single.name, 'ask_user');
@@ -903,8 +950,9 @@ void main() {
       final result = await startFuture;
       final localThreadStart = result.session.messages
           .map((event) => event.message)
-          .whereType<StartThread>()
+          .whereType<TurnStart>()
           .single;
+      expect(localThreadStart.threadId, result.threadPath);
       expect(localThreadStart.senderName, 'jesse.ezell@timu.com');
     },
   );
@@ -933,8 +981,9 @@ void main() {
       final result = await startFuture;
       final localThreadStart = result.session.messages
           .map((event) => event.message)
-          .whereType<StartThread>()
+          .whereType<TurnStart>()
           .single;
+      expect(localThreadStart.threadId, result.threadPath);
       expect(localThreadStart.senderName, 'explicit@example.com');
     },
   );

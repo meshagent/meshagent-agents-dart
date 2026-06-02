@@ -404,6 +404,7 @@ class AgentThreadStorageRepository extends ThreadStorageRepository {
     _subscription = chatClient.events.listen(_handleEvent);
     final ready = Completer<void>();
     _pendingOpen = ready;
+    await chatClient.sendAgentMessage(WatchThreads(), ignoreOffline: true);
     await _requestList();
     await ready.future;
   }
@@ -419,6 +420,9 @@ class AgentThreadStorageRepository extends ThreadStorageRepository {
     if (pendingOpen != null && !pendingOpen.isCompleted) {
       pendingOpen.complete();
     }
+    await chatClient
+        .sendAgentMessage(UnwatchThreads(), ignoreOffline: true)
+        .catchError((_) {});
     await subscription?.cancel();
   }
 

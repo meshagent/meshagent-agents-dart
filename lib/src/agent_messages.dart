@@ -27,6 +27,8 @@ const String agentParticipantDisconnectType =
 const String agentThreadDeleteType = 'meshagent.agent.thread.delete';
 const String agentThreadRenameType = 'meshagent.agent.thread.rename';
 const String agentThreadListType = 'meshagent.agent.thread.list';
+const String agentThreadWatchType = 'meshagent.agent.thread.watch';
+const String agentThreadUnwatchType = 'meshagent.agent.thread.unwatch';
 const String agentThreadListedType = 'meshagent.agent.thread.listed';
 const String agentThreadCreatedType = 'meshagent.agent.thread.created';
 const String agentThreadUpdatedType = 'meshagent.agent.thread.updated';
@@ -197,6 +199,10 @@ abstract class AgentMessage {
         return _withPayloadCreatedAt(json, RenameThread.fromJson(json));
       case agentThreadListType:
         return _withPayloadCreatedAt(json, ListThreads.fromJson(json));
+      case agentThreadWatchType:
+        return _withPayloadCreatedAt(json, WatchThreads.fromJson(json));
+      case agentThreadUnwatchType:
+        return _withPayloadCreatedAt(json, UnwatchThreads.fromJson(json));
       case agentThreadListedType:
         return _withPayloadCreatedAt(json, ThreadsListed.fromJson(json));
       case agentThreadCreatedType:
@@ -1015,6 +1021,26 @@ class ListThreads extends AgentMessage {
   Map<String, dynamic> toJson() =>
       super.toJson()
         ..addAll(<String, dynamic>{'limit': limit, 'offset': offset});
+}
+
+class WatchThreads extends AgentMessage {
+  WatchThreads({super.messageId, super.senderName})
+    : super(type: agentThreadWatchType);
+
+  factory WatchThreads.fromJson(Map<String, dynamic> json) => WatchThreads(
+    messageId: _stringOrNull(json['message_id']),
+    senderName: _stringOrNull(json['sender_name']),
+  );
+}
+
+class UnwatchThreads extends AgentMessage {
+  UnwatchThreads({super.messageId, super.senderName})
+    : super(type: agentThreadUnwatchType);
+
+  factory UnwatchThreads.fromJson(Map<String, dynamic> json) => UnwatchThreads(
+    messageId: _stringOrNull(json['message_id']),
+    senderName: _stringOrNull(json['sender_name']),
+  );
 }
 
 class AgentThreadListEntry {

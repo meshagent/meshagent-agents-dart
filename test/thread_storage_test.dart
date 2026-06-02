@@ -59,7 +59,9 @@ void main() {
       final client = _FakeChatClient();
       final repository = AgentThreadStorageRepository(chatClient: client);
       final open = repository.open();
-      final request = client.sent.single as ListThreads;
+      expect(client.sent.first, isA<WatchThreads>());
+      await Future<void>.delayed(Duration.zero);
+      final request = client.sent.whereType<ListThreads>().single;
 
       client.receive(
         ThreadsListed(
@@ -81,13 +83,15 @@ void main() {
       await open;
       expect(repository.entries().map((entry) => entry.name), ['One']);
       await repository.close();
+      expect(client.sent.whereType<UnwatchThreads>(), hasLength(1));
     });
 
     test('renames and deletes through agent messages', () async {
       final client = _FakeChatClient();
       final repository = AgentThreadStorageRepository(chatClient: client);
       final open = repository.open();
-      final request = client.sent.single as ListThreads;
+      await Future<void>.delayed(Duration.zero);
+      final request = client.sent.whereType<ListThreads>().single;
       client.receive(
         ThreadsListed(
           sourceMessageId: request.messageId,
@@ -125,7 +129,8 @@ void main() {
       });
 
       final open = repository.open();
-      final request = client.sent.single as ListThreads;
+      await Future<void>.delayed(Duration.zero);
+      final request = client.sent.whereType<ListThreads>().single;
       client.receive(
         ThreadsListed(
           sourceMessageId: request.messageId,
