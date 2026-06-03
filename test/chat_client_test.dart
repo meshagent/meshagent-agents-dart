@@ -84,6 +84,190 @@ void main() {
     expect(parsed.toJson()['created_at'], '2026-05-28T16:11:48.538Z');
   });
 
+  test('agent message parsing preserves metadata', () {
+    final parsed = AgentMessage.fromJson({
+      'type': agentReasoningContentEndedType,
+      'message_id': 'event-1',
+      'thread_id': 'dataset://threads/example',
+      'turn_id': 'turn-1',
+      'item_id': 'rs-1',
+      'content': '',
+      'metadata': {
+        'openai': {'encrypted_content': 'opaque'},
+      },
+    });
+
+    expect(parsed.metadata['openai'], {'encrypted_content': 'opaque'});
+    expect(parsed.toJson()['metadata'], {
+      'openai': {'encrypted_content': 'opaque'},
+    });
+  });
+
+  test(
+    'thread replay uses event metadata timestamps when payload has no created_at',
+    () {
+      final client = _FakeChatClient();
+      final session = client.openThread(
+        'dataset://threads/example',
+        load: false,
+      );
+      final turnStartedAt = DateTime.utc(2026, 5, 28, 16, 11, 48, 538);
+      final textStartedAt = DateTime.utc(2026, 5, 28, 16, 11, 52, 425);
+
+      final turn = TurnStart(
+        threadId: session.threadPath,
+        messageId: 'message-1',
+        content: agentInputContent(
+          text: 'loaded question',
+          attachments: const <AgentFileContent>[],
+        ),
+      );
+      final text = AgentTextContentDelta(
+        threadId: session.threadPath,
+        turnId: 'turn-1',
+        itemId: 'assistant-1',
+        text: 'loaded answer',
+      );
+
+      expect(
+        turn.toJson()['created_at'],
+        isNot(turnStartedAt.toIso8601String()),
+      );
+      expect(
+        text.toJson()['created_at'],
+        isNot(textStartedAt.toIso8601String()),
+      );
+
+      client.handleAgentMessage(turn, createdAt: turnStartedAt);
+      client.handleAgentMessage(text, createdAt: textStartedAt);
+      client.handleAgentMessage(ThreadLoaded(threadId: session.threadPath));
+
+      expect(session.messages[0].createdAt, turnStartedAt);
+      expect(
+        session.messages[0].payload['created_at'],
+        turnStartedAt.toIso8601String(),
+      );
+      expect(session.pendingInputs.single.createdAt, turnStartedAt);
+      expect(session.messages[1].createdAt, textStartedAt);
+      expect(
+        session.messages[1].payload['created_at'],
+        textStartedAt.toIso8601String(),
+      );
+    },
+  );
+
+  test(
+    'replayed tool call events use event metadata timestamps when payload has no created_at',
+    () {
+      final replayedAt = DateTime.utc(2026, 5, 28, 23, 58, 32, 425);
+      final message = AgentToolCallStarted(
+        threadId: 'dataset://threads/example',
+        turnId: 'turn-1',
+        itemId: 'tool-1',
+        toolkit: 'client',
+        tool: 'ask_user',
+        arguments: const <String, Object?>{'prompt': 'connected?'},
+      );
+      final event = AgentMessageEvent(message: message, createdAt: replayedAt);
+
+      expect(
+        message.toJson()['created_at'],
+        isNot(replayedAt.toIso8601String()),
+      );
+      expect(event.createdAt, replayedAt);
+      expect(event.payload['created_at'], replayedAt.toIso8601String());
+    },
+  );
+
+  test(
+    'thread sessions use incoming event time for pending input timestamps',
+    () {
+      final client = _FakeChatClient();
+      final session = client.openThread(
+        'dataset://threads/example',
+        load: false,
+      );
+      final createdAt = DateTime.utc(2026, 5, 28, 16, 11, 48, 538);
+
+      session.addAgentMessage(
+        AgentMessageEvent(
+          message: TurnStart(
+            threadId: session.threadPath,
+            messageId: 'message-1',
+            content: agentInputContent(
+              text: 'loaded question',
+              attachments: const <AgentFileContent>[],
+            ),
+          ),
+          createdAt: createdAt,
+        ),
+      );
+
+      expect(session.pendingInputs.single.createdAt, createdAt);
+      expect(session.messages.single.createdAt, createdAt);
+    },
+  );
+
+  test('reloading an open thread clears stale order before replay', () async {
+    final client = _FakeChatClient();
+    final session = client.openThread('dataset://threads/example', load: false);
+    session.addAgentMessage(
+      AgentMessageEvent(
+        message: AgentTextContentDelta(
+          threadId: session.threadPath,
+          turnId: 'turn-1',
+          itemId: 'assistant-1',
+          text: 'old assistant first',
+        ),
+        createdAt: DateTime.utc(2026, 5, 28, 16, 12),
+      ),
+    );
+    session.addAgentMessage(
+      AgentMessageEvent(
+        message: TurnStart(
+          threadId: session.threadPath,
+          messageId: 'user-1',
+          content: agentInputContent(
+            text: 'old user second',
+            attachments: const <AgentFileContent>[],
+          ),
+        ),
+        createdAt: DateTime.utc(2026, 5, 28, 16, 11),
+      ),
+    );
+
+    client.openThread(session.threadPath, reloadIfOpen: true);
+    await Future<void>.delayed(Duration.zero);
+    expect(session.messages, isEmpty);
+
+    client.handleAgentMessage(
+      TurnStart(
+        threadId: session.threadPath,
+        messageId: 'user-1',
+        content: agentInputContent(
+          text: 'loaded user',
+          attachments: const <AgentFileContent>[],
+        ),
+      ),
+      createdAt: DateTime.utc(2026, 5, 28, 16, 11),
+    );
+    client.handleAgentMessage(
+      AgentTextContentDelta(
+        threadId: session.threadPath,
+        turnId: 'turn-1',
+        itemId: 'assistant-1',
+        text: 'loaded assistant',
+      ),
+      createdAt: DateTime.utc(2026, 5, 28, 16, 12),
+    );
+    client.handleAgentMessage(ThreadLoaded(threadId: session.threadPath));
+
+    expect(session.messages[0].message, isA<TurnStart>());
+    expect(session.messages[0].createdAt, DateTime.utc(2026, 5, 28, 16, 11));
+    expect(session.messages[1].message, isA<AgentTextContentDelta>());
+    expect(session.messages[1].createdAt, DateTime.utc(2026, 5, 28, 16, 12));
+  });
+
   test('usage updates tolerate missing context window token counts', () {
     final parsed = AgentMessage.fromJson({
       'type': agentUsageUpdatedType,
@@ -614,6 +798,7 @@ void main() {
     final startFuture = client.startThread(
       messageId: 'client-message-1',
       message: 'hello',
+      name: 'Created Thread',
       attachments: const <AgentFileContent>[],
     );
 
@@ -635,6 +820,13 @@ void main() {
     );
     expect(open.load, isFalse);
     expect(result.session.isLoading, isFalse);
+    expect(result.session.messages, hasLength(1));
+    final optimisticMessage = result.session.messages.single.message;
+    expect(optimisticMessage, isA<TurnStart>());
+    final optimisticTurnStart = optimisticMessage as TurnStart;
+    expect(optimisticTurnStart.threadId, result.threadPath);
+    expect(optimisticTurnStart.messageId, 'client-message-1');
+    expect(optimisticTurnStart.content.single.toJson()['text'], 'hello');
 
     expect(client.openThread(result.threadPath), same(result.session));
     await Future<void>.delayed(Duration.zero);
@@ -644,6 +836,44 @@ void main() {
       ),
       hasLength(1),
     );
+  });
+
+  test('startThread preserves a server-created thread event', () async {
+    final client = _FakeChatClient();
+    final events = <AgentMessageEvent>[];
+    final subscription = client.events.listen(events.add);
+    addTearDown(subscription.cancel);
+    final startFuture = client.startThread(
+      messageId: 'client-message-1',
+      message: 'hello',
+      attachments: const <AgentFileContent>[],
+    );
+
+    client.handleAgentMessage(
+      ThreadCreated(
+        thread: const AgentThreadListEntry(
+          path: 'dataset://threads/created',
+          name: 'Server Generated Name',
+          createdAt: '2026-05-28T23:00:00.000Z',
+          modifiedAt: '2026-05-28T23:00:00.000Z',
+        ),
+      ),
+    );
+    client.handleAgentMessage(
+      ThreadStarted(
+        sourceMessageId: 'client-message-1',
+        threadId: 'dataset://threads/created',
+      ),
+    );
+
+    final result = await startFuture;
+    expect(result.threadPath, 'dataset://threads/created');
+    final createdEvents = events
+        .map((event) => event.message)
+        .whereType<ThreadCreated>()
+        .toList();
+    expect(createdEvents, hasLength(1));
+    expect(createdEvents.single.thread.name, 'Server Generated Name');
   });
 
   test(
@@ -743,9 +973,10 @@ void main() {
       expect(result.threadPath, 'dataset://threads/created');
       final localThreadStart = result.session.messages
           .map((event) => event.message)
-          .whereType<StartThread>()
+          .whereType<TurnStart>()
           .single;
       expect(localThreadStart.messageId, 'client-message-1');
+      expect(localThreadStart.threadId, result.threadPath);
       expect(localThreadStart.content, isNotEmpty);
       expect(localThreadStart.clientToolkits, hasLength(1));
       expect(localThreadStart.clientToolkits!.single.name, 'ask_user');
@@ -775,8 +1006,9 @@ void main() {
       final result = await startFuture;
       final localThreadStart = result.session.messages
           .map((event) => event.message)
-          .whereType<StartThread>()
+          .whereType<TurnStart>()
           .single;
+      expect(localThreadStart.threadId, result.threadPath);
       expect(localThreadStart.senderName, 'jesse.ezell@timu.com');
     },
   );
@@ -805,8 +1037,9 @@ void main() {
       final result = await startFuture;
       final localThreadStart = result.session.messages
           .map((event) => event.message)
-          .whereType<StartThread>()
+          .whereType<TurnStart>()
           .single;
+      expect(localThreadStart.threadId, result.threadPath);
       expect(localThreadStart.senderName, 'explicit@example.com');
     },
   );
@@ -1077,6 +1310,14 @@ void main() {
     });
 
     await client.start();
+    final clientEvents = <AgentConnectionStatus>[];
+    final clientEventSubscription = client.events.listen((event) {
+      final message = event.message;
+      if (message is AgentConnectionStatus) {
+        clientEvents.add(message);
+      }
+    });
+    addTearDown(clientEventSubscription.cancel);
     final session = client.openThread('dataset://threads/reconnect');
     final firstSocket = await waitForSocket(0);
     await waitForPayload(firstSocket, agentThreadOpenType);
@@ -1088,11 +1329,11 @@ void main() {
     await firstSocket.close(WebSocketStatus.goingAway, 'test reconnect');
 
     await _waitFor(
-      () => session.messages.any(
-        (event) =>
-            event.message is AgentConnectionStatus &&
-            (event.message as AgentConnectionStatus).status == 'reconnecting',
-      ),
+      () => clientEvents.any((event) => event.status == 'reconnecting'),
+    );
+    expect(
+      session.messages.where((event) => event.message is AgentConnectionStatus),
+      isEmpty,
     );
     final secondSocket = await waitForSocket(1);
     final reopened = await waitForPayload(secondSocket, agentThreadOpenType);
@@ -1112,11 +1353,11 @@ void main() {
     expect(session.isLoading, isFalse);
     expect(session.loadState.phase, ChatThreadSessionLoadPhase.loaded);
     await _waitFor(
-      () => session.messages.any(
-        (event) =>
-            event.message is AgentConnectionStatus &&
-            (event.message as AgentConnectionStatus).status == 'reconnected',
-      ),
+      () => clientEvents.any((event) => event.status == 'reconnected'),
+    );
+    expect(
+      session.messages.where((event) => event.message is AgentConnectionStatus),
+      isEmpty,
     );
   });
 

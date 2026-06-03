@@ -5,7 +5,10 @@ import 'package:meshagent_agents/meshagent_agents.dart';
 import 'package:test/test.dart';
 
 class _FakeChatClient extends BaseChatClient {
+  _FakeChatClient({this.offline = false});
+
   final sent = <AgentMessage>[];
+  bool offline;
 
   @override
   Future<void> sendAgentMessage(
@@ -13,11 +16,18 @@ class _FakeChatClient extends BaseChatClient {
     Uint8List? attachment,
     bool ignoreOffline = false,
   }) async {
+    if (offline && ignoreOffline) {
+      return;
+    }
     sent.add(message);
   }
 
   void receive(AgentMessage message) {
     handleAgentMessage(message);
+  }
+
+  void clearSent() {
+    sent.clear();
   }
 }
 
@@ -59,7 +69,9 @@ void main() {
       final client = _FakeChatClient();
       final repository = AgentThreadStorageRepository(chatClient: client);
       final open = repository.open();
-      final request = client.sent.single as ListThreads;
+      expect(client.sent.first, isA<WatchThreads>());
+      await Future<void>.delayed(Duration.zero);
+      final request = client.sent.whereType<ListThreads>().single;
 
       client.receive(
         ThreadsListed(
@@ -81,13 +93,102 @@ void main() {
       await open;
       expect(repository.entries().map((entry) => entry.name), ['One']);
       await repository.close();
+      expect(client.sent.whereType<UnwatchThreads>(), hasLength(1));
+    });
+
+    test('retries watch and list when the agent connects after open', () async {
+      final client = _FakeChatClient(offline: true);
+      final repository = AgentThreadStorageRepository(chatClient: client);
+
+      final open = repository.open();
+      await Future<void>.delayed(Duration.zero);
+      expect(client.sent, isEmpty);
+
+      client.offline = false;
+      client.receive(AgentConnectionStatus(status: 'connected'));
+      await Future<void>.delayed(Duration.zero);
+
+      expect(client.sent.whereType<WatchThreads>(), hasLength(1));
+      final request = client.sent.whereType<ListThreads>().single;
+      client.receive(
+        ThreadsListed(
+          sourceMessageId: request.messageId,
+          total: 1,
+          offset: 0,
+          limit: 200,
+          threads: const [
+            AgentThreadListEntry(
+              path: 'dataset://threads/connected',
+              name: 'Connected Thread',
+              createdAt: '2026-01-01T00:00:00Z',
+              modifiedAt: '2026-01-02T00:00:00Z',
+            ),
+          ],
+        ),
+      );
+
+      await open;
+      expect(repository.entries().map((entry) => entry.name), [
+        'Connected Thread',
+      ]);
+      await repository.close();
+    });
+
+    test('refreshes the list after a thread starts', () async {
+      final client = _FakeChatClient();
+      final repository = AgentThreadStorageRepository(chatClient: client);
+      final open = repository.open();
+      await Future<void>.delayed(Duration.zero);
+      final initialRequest = client.sent.whereType<ListThreads>().single;
+      client.receive(
+        ThreadsListed(
+          sourceMessageId: initialRequest.messageId,
+          total: 0,
+          offset: 0,
+          limit: 200,
+          threads: const [],
+        ),
+      );
+      await open;
+      client.clearSent();
+
+      client.receive(
+        ThreadStarted(
+          sourceMessageId: 'start-message',
+          threadId: 'dataset://threads/new',
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      final refreshRequest = client.sent.whereType<ListThreads>().single;
+      client.receive(
+        ThreadsListed(
+          sourceMessageId: refreshRequest.messageId,
+          total: 1,
+          offset: 0,
+          limit: 200,
+          threads: const [
+            AgentThreadListEntry(
+              path: 'dataset://threads/new',
+              name: 'New Thread',
+              createdAt: '2026-01-01T00:00:00Z',
+              modifiedAt: '2026-01-02T00:00:00Z',
+            ),
+          ],
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      expect(repository.entries().map((entry) => entry.name), ['New Thread']);
+      await repository.close();
     });
 
     test('renames and deletes through agent messages', () async {
       final client = _FakeChatClient();
       final repository = AgentThreadStorageRepository(chatClient: client);
       final open = repository.open();
-      final request = client.sent.single as ListThreads;
+      await Future<void>.delayed(Duration.zero);
+      final request = client.sent.whereType<ListThreads>().single;
       client.receive(
         ThreadsListed(
           sourceMessageId: request.messageId,
@@ -125,7 +226,8 @@ void main() {
       });
 
       final open = repository.open();
-      final request = client.sent.single as ListThreads;
+      await Future<void>.delayed(Duration.zero);
+      final request = client.sent.whereType<ListThreads>().single;
       client.receive(
         ThreadsListed(
           sourceMessageId: request.messageId,

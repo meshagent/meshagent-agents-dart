@@ -10,19 +10,28 @@ import 'package:uuid/uuid.dart';
 const _secret = 'test-secret-secure-secret-sample2560binarykey';
 
 String? get _liveSkipReason {
+  if (Platform.environment['RUN_MESHAGENT_LIVE_ASSISTANT_TESTS'] != '1') {
+    return 'Set RUN_MESHAGENT_LIVE_ASSISTANT_TESTS=1 with a live assistant agent to run.';
+  }
   final missing = <String>[
     if ((Platform.environment['MESHAGENT_API_URL'] ?? '').isEmpty)
       'MESHAGENT_API_URL',
-    if ((Platform.environment['MESHAGENT_LIVE_AGENT_ROOM'] ?? '').isEmpty)
-      'MESHAGENT_LIVE_AGENT_ROOM',
-    if ((Platform.environment['MESHAGENT_LIVE_AGENT_NAME'] ?? '').isEmpty)
-      'MESHAGENT_LIVE_AGENT_NAME',
   ];
   if (missing.isEmpty) {
     return null;
   }
   return 'Live assistant tests require ${missing.join(', ')}.';
 }
+
+String get _liveRoomName =>
+    (Platform.environment['MESHAGENT_LIVE_AGENT_ROOM'] ?? '').trim().isNotEmpty
+    ? Platform.environment['MESHAGENT_LIVE_AGENT_ROOM']!.trim()
+    : 'jesse';
+
+String get _liveAgentName =>
+    (Platform.environment['MESHAGENT_LIVE_AGENT_NAME'] ?? '').trim().isNotEmpty
+    ? Platform.environment['MESHAGENT_LIVE_AGENT_NAME']!.trim()
+    : 'assistant';
 
 RoomClient _newRoomClient({
   required String roomName,
@@ -207,8 +216,8 @@ void main() {
     final observedMessages = <AgentMessage>[];
 
     setUpAll(() async {
-      final roomName = Platform.environment['MESHAGENT_LIVE_AGENT_ROOM']!;
-      final agentName = Platform.environment['MESHAGENT_LIVE_AGENT_NAME']!;
+      final roomName = _liveRoomName;
+      final agentName = _liveAgentName;
       room = _newRoomClient(
         roomName: roomName,
         participantName: 'dart-live-thread-${const Uuid().v4()}',
@@ -269,7 +278,8 @@ void main() {
         expect(
           session!.messages.any(
             (event) =>
-                event.message is StartThread &&
+                event.message is TurnStart &&
+                (event.message as TurnStart).threadId == createdThreadPath! &&
                 event.message.messageId == messageId,
           ),
           isTrue,

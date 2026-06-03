@@ -267,7 +267,15 @@ abstract class BaseChatClient extends ChangeEmitter {
       }
       final session = openThread(threadPath, load: false);
       if (!omitContent) {
-        session.addAgentMessage(AgentMessageEvent(message: payload));
+        session.addAgentMessage(
+          AgentMessageEvent(
+            message: _resolvedStartThreadMessage(
+              payload: payload,
+              threadPath: threadPath,
+            ),
+            createdAt: payload.createdAtUtc,
+          ),
+        );
       }
       _drainPendingSessionEvents(threadPath, session);
       final realtimeConnection = response is ThreadStarted
@@ -283,6 +291,28 @@ abstract class BaseChatClient extends ChangeEmitter {
     }
   }
 
+  TurnStart _resolvedStartThreadMessage({
+    required StartThread payload,
+    required String threadPath,
+  }) {
+    return TurnStart(
+      threadId: threadPath,
+      messageId: payload.messageId,
+      senderName: payload.senderName,
+      content: payload.content ?? <AgentInputContent>[],
+      backend: payload.backend,
+      provider: payload.provider,
+      model: payload.model,
+      voice: payload.voice,
+      outputModalities: payload.outputModalities,
+      instructions: payload.instructions,
+      mcp: payload.mcp,
+      clientToolkits: payload.clientToolkits,
+      toolkits: payload.toolkits,
+      toolChoice: payload.toolChoice,
+    );
+  }
+
   Future<void> sendAgentMessage(
     AgentMessage message, {
     Uint8List? attachment,
@@ -296,17 +326,6 @@ abstract class BaseChatClient extends ChangeEmitter {
   }) {
     if (message is AgentConnectionStatus) {
       _connectionStatus = message;
-      for (final session in _sessionsByPath.values) {
-        if (session.isOpen) {
-          session.addAgentMessage(
-            AgentMessageEvent(
-              message: message,
-              createdAt: createdAt,
-              attachment: attachment,
-            ),
-          );
-        }
-      }
     }
     _events.add(
       AgentMessageEvent(
@@ -324,7 +343,6 @@ abstract class BaseChatClient extends ChangeEmitter {
         pending.complete(message);
       }
     }
-
     final threadPath = message is AgentThreadMessage
         ? message.threadId.trim()
         : null;
@@ -377,11 +395,6 @@ abstract class BaseChatClient extends ChangeEmitter {
     );
     _connectionStatus = event;
     _events.add(AgentMessageEvent(message: event));
-    for (final session in _sessionsByPath.values) {
-      if (session.isOpen) {
-        session.addAgentMessage(AgentMessageEvent(message: event));
-      }
-    }
     notifyListeners();
   }
 
@@ -397,8 +410,7 @@ abstract class BaseChatClient extends ChangeEmitter {
 
 class MessagingChatClient extends BaseChatClient {
   MessagingChatClient({required this.room, this.agentName}) {
-    _roomSubscription = room.listen(_onRoomEvent);
-    room.messaging.addListener(_onMessagingChanged);
+    _attachListeners();
   }
 
   final RoomClient room;
@@ -408,6 +420,9 @@ class MessagingChatClient extends BaseChatClient {
       <String, Completer<RemoteParticipant>>{};
   bool _started = false;
   String? _agentParticipantId;
+  bool _hasConnected = false;
+  bool _waitingForParticipant = false;
+  bool _messagingListenerAttached = false;
 
   @override
   String? localParticipantName() {
@@ -421,8 +436,11 @@ class MessagingChatClient extends BaseChatClient {
       return;
     }
     _started = true;
+    _attachListeners();
     room.messaging.start();
     await room.messaging.enable();
+    _waitingForParticipant = true;
+    _onMessagingChanged();
   }
 
   @override
@@ -430,7 +448,7 @@ class MessagingChatClient extends BaseChatClient {
     _started = false;
     await _roomSubscription?.cancel();
     _roomSubscription = null;
-    room.messaging.removeListener(_onMessagingChanged);
+    _detachMessagingListener();
     for (final wait in _pendingParticipantWaits.values) {
       if (!wait.isCompleted) {
         wait.completeError(
@@ -451,6 +469,22 @@ class MessagingChatClient extends BaseChatClient {
     }
   }
 
+  void _attachListeners() {
+    _roomSubscription ??= room.listen(_onRoomEvent);
+    if (!_messagingListenerAttached) {
+      room.messaging.addListener(_onMessagingChanged);
+      _messagingListenerAttached = true;
+    }
+  }
+
+  void _detachMessagingListener() {
+    if (!_messagingListenerAttached) {
+      return;
+    }
+    room.messaging.removeListener(_onMessagingChanged);
+    _messagingListenerAttached = false;
+  }
+
   @override
   RemoteParticipant? agentParticipant() {
     final normalizedAgentName = agentName?.trim();
@@ -459,6 +493,9 @@ class MessagingChatClient extends BaseChatClient {
           normalizedAgentName.isNotEmpty &&
           participant.getAttribute('name') != normalizedAgentName) {
         continue;
+      }
+      if (normalizedAgentName != null && normalizedAgentName.isNotEmpty) {
+        return participant;
       }
       if (participant.getAttribute('supports_agent_messages') == true) {
         return participant;
@@ -514,17 +551,37 @@ class MessagingChatClient extends BaseChatClient {
     if (participantId != _agentParticipantId) {
       if (participantId == null) {
         if (_agentParticipantId != null) {
+          _waitingForParticipant = true;
           emitConnectionStatus(
             status: 'disconnected',
             message: 'Agent messaging disconnected',
             reason: 'participant_disconnected',
           );
+          emitConnectionStatus(
+            status: 'reconnecting',
+            message: 'Waiting for agent messaging',
+            reason: 'participant_disconnected',
+          );
+        } else if (_started && _waitingForParticipant) {
+          emitConnectionStatus(
+            status: 'reconnecting',
+            message: 'Waiting for agent messaging',
+            reason: 'participant_offline',
+          );
         }
       } else {
+        final status = _hasConnected ? 'reconnected' : 'connected';
+        _hasConnected = true;
+        _waitingForParticipant = false;
         emitConnectionStatus(
-          status: 'connected',
-          message: 'Agent messaging connected',
+          status: status,
+          message: status == 'reconnected'
+              ? 'Agent messaging reconnected'
+              : 'Agent messaging connected',
         );
+        if (status == 'reconnected') {
+          unawaited(_reopenOpenSessions());
+        }
       }
       _agentParticipantId = participantId;
     }
@@ -542,18 +599,18 @@ class MessagingChatClient extends BaseChatClient {
     if (event is RoomStatusEvent) {
       final status = event.status.trim().toLowerCase();
       if (status == 'connected' || status == 'reconnected') {
-        emitConnectionStatus(
-          status: status,
-          message: event.message.trim().isNotEmpty
-              ? event.message
-              : 'Room connection restored',
-        );
+        _waitingForParticipant = true;
+        _onMessagingChanged();
       } else if (status == 'disconnected' || status == 'reconnecting') {
+        _agentParticipantId = null;
+        _waitingForParticipant = true;
         emitConnectionStatus(
-          status: status,
+          status: status == 'disconnected' ? 'disconnected' : 'reconnecting',
           message: event.message.trim().isNotEmpty
               ? event.message
-              : 'Room connection lost',
+              : (status == 'disconnected'
+                    ? 'Agent messaging disconnected'
+                    : 'Waiting for agent messaging'),
         );
       }
       return;
@@ -597,6 +654,15 @@ class MessagingChatClient extends BaseChatClient {
         createdAt: _createdAtFromPayload(payload),
         attachment: event.message.attachment,
       );
+    }
+  }
+
+  Future<void> _reopenOpenSessions() async {
+    for (final session in sessions) {
+      if (!session.isOpen) {
+        continue;
+      }
+      await session.open(load: true, sinceTurn: session.lastCompletedTurnId);
     }
   }
 }
@@ -953,6 +1019,9 @@ class ChatThreadSession extends ChangeEmitter {
   Future<void> open({bool load = true, String? sinceTurn}) async {
     if (_open) {
       if (load) {
+        if (sinceTurn == null) {
+          _resetReplayState();
+        }
         final openThread = OpenThread(
           threadId: threadPath,
           load: true,
@@ -986,6 +1055,18 @@ class ChatThreadSession extends ChangeEmitter {
     } catch (error) {
       _setLoadState(_failedLoadState(error));
     }
+  }
+
+  void _resetReplayState() {
+    _messages.clear();
+    _messageIndexes.clear();
+    _localAgentMessageIds.clear();
+    _pendingLocalInputMessageIds.clear();
+    _mergedDeltaMessageIds.clear();
+    _pendingInputs.clear();
+    _lastCompletedTurnId = null;
+    _lastAgentMessageType = null;
+    _lastAgentMessageAt = null;
   }
 
   Future<void> close() async {
@@ -1109,7 +1190,7 @@ class ChatThreadSession extends ChangeEmitter {
         messageType: payload.type,
         threadPath: threadPath,
         payload: payload,
-        createdAt: DateTime.now().toUtc(),
+        createdAt: payload.createdAtUtc,
         awaitingAcceptance: true,
         awaitingApplication: true,
       ),
@@ -1191,7 +1272,7 @@ class ChatThreadSession extends ChangeEmitter {
     final message = event.message;
     final type = message.type;
     _lastAgentMessageType = type;
-    _lastAgentMessageAt = DateTime.now().toUtc();
+    _lastAgentMessageAt = event.createdAt;
     final messageId = message.messageId;
     final sourceMessageId = _sourceMessageId(message);
     if (type == agentThreadStartType ||
@@ -1205,7 +1286,7 @@ class ChatThreadSession extends ChangeEmitter {
             messageType: type,
             threadPath: threadPath,
             payload: message,
-            createdAt: DateTime.now().toUtc(),
+            createdAt: event.createdAt,
             awaitingAcceptance: true,
             awaitingApplication: true,
           ),

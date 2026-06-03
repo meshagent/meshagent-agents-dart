@@ -1,3 +1,25 @@
+## [0.44.3]
+- Fixed animated status counters in the Flutter chat UI so large byte and count jumps render correctly without runaway digit growth.
+
+## [0.44.2]
+- Messaging chat clients now track agent participant presence and room status more accurately, distinguish first connect from reconnect, and reopen open thread sessions after reconnect.
+- Thread storage repositories now resubscribe and refresh thread lists after a reconnect, restoring watched-thread state automatically.
+- Agent connection status is no longer fanned out into open thread sessions, preventing duplicate status messages from appearing in reopened chats.
+
+## [0.44.1]
+- Stability
+
+## [0.44.0]
+- Added thread watch/unwatch messages plus multiple thread-storage support to the Dart agent client API.
+- Chat session state now preserves created timestamps and resets replay state correctly when reopening threads, improving message ordering and pending-input handling.
+- Updated agent message modeling to carry richer thread metadata for live assistant, mail, and storage-aware workflows.
+
+## [0.43.4]
+- `AgentMessage` now serializes `created_at` and restores it from incoming payloads so Dart agents keep message timestamps across round trips.
+- `AgentMessageEvent` now carries its own timestamp, supports listeners, and keeps merged payloads aligned with the original event time.
+- `MessagingChatClient` now routes participantless thread lifecycle updates and preserves room message timestamps when turning messages into session events.
+- UI helpers now support an injectable reference time for relative labels, show seconds for recent timestamps, and expose more resilient dataset row timestamp resolution.
+
 ## [0.43.3]
 - Stability
 

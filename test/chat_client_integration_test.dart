@@ -356,14 +356,43 @@ void main() {
         'url': 'wss://example.invalid/session',
         'headers': {'authorization': 'Bearer token-1'},
       });
-      expect(
-        result.session.messages.single.payload['type'],
-        agentThreadStartType,
-      );
+      final localStart = result.session.messages.single.message;
+      expect(localStart, isA<TurnStart>());
+      expect((localStart as TurnStart).threadId, result.threadPath);
+      expect(localStart.messageId, startMessage.payload['message_id']);
+      expect(jsonEncode(localStart.content), contains('hello there'));
 
       final open = await harness.nextAgentMessageOfType(agentThreadOpenType);
       expect(open.payload['thread_id'], result.threadPath);
     });
+
+    test(
+      'ignoreOffline returns when no agent participant is present',
+      () async {
+        final suffix = const Uuid().v4();
+        final room = _newRoomClient(
+          roomName: 'dart-chat-offline-$suffix',
+          participantName: 'user',
+        );
+        final client = MessagingChatClient(
+          room: room,
+          agentName: 'missing-agent-$suffix',
+        );
+        addTearDown(() async {
+          await client.stop().catchError((_) {});
+          room.dispose();
+        });
+
+        await room.start();
+        room.messaging.start();
+        await room.messaging.enable();
+        await client.start();
+
+        await client
+            .sendAgentMessage(WatchThreads(), ignoreOffline: true)
+            .timeout(const Duration(milliseconds: 250));
+      },
+    );
 
     test(
       'tracks pending text turns through acceptance and application',
