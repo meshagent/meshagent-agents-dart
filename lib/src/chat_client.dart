@@ -313,11 +313,7 @@ abstract class BaseChatClient extends ChangeEmitter {
     );
   }
 
-  Future<void> sendAgentMessage(
-    AgentMessage message, {
-    Uint8List? attachment,
-    bool ignoreOffline = false,
-  });
+  Future<void> sendAgentMessage(AgentMessage message, {Uint8List? attachment});
 
   void handleAgentMessage(
     AgentMessage message, {
@@ -526,22 +522,17 @@ class MessagingChatClient extends BaseChatClient {
   Future<void> sendAgentMessage(
     AgentMessage message, {
     Uint8List? attachment,
-    bool ignoreOffline = false,
   }) async {
     await start();
-    var participant = agentParticipant();
+    final participant = agentParticipant();
     if (participant == null) {
-      if (ignoreOffline) {
-        return;
-      }
-      participant = await waitForAgentParticipant(waitKey: message.messageId);
+      throw StateError('Agent messaging participant is not available.');
     }
     await room.messaging.sendMessage(
       to: participant,
       type: agentRoomMessageType,
       message: message.toJson(),
       attachment: attachment,
-      ignoreOffline: ignoreOffline,
     );
   }
 
@@ -806,7 +797,6 @@ class WebSocketChatClient extends BaseChatClient {
   Future<void> sendAgentMessage(
     AgentMessage message, {
     Uint8List? attachment,
-    bool ignoreOffline = false,
   }) async {
     if (attachment != null) {
       throw UnsupportedError(
@@ -815,9 +805,6 @@ class WebSocketChatClient extends BaseChatClient {
     }
     final webSocket = _webSocket;
     if (webSocket == null) {
-      if (ignoreOffline) {
-        return;
-      }
       throw StateError(_closedMessage());
     }
     webSocket.sink.add(msgpack.serialize(message.toJson()));
@@ -1029,8 +1016,8 @@ class ChatThreadSession extends ChangeEmitter {
         );
         _setLoadState(_loadingStateForOpen(openThread, sinceTurn: sinceTurn));
         try {
-          await _client.sendAgentMessage(openThread, ignoreOffline: true);
-          await requestModels(ignoreOffline: true);
+          await _client.sendAgentMessage(openThread);
+          await requestModels();
         } catch (error) {
           _setLoadState(_failedLoadState(error));
         }
@@ -1050,8 +1037,8 @@ class ChatThreadSession extends ChangeEmitter {
       notifyListeners();
     }
     try {
-      await _client.sendAgentMessage(openThread, ignoreOffline: true);
-      await requestModels(ignoreOffline: true);
+      await _client.sendAgentMessage(openThread);
+      await requestModels();
     } catch (error) {
       _setLoadState(_failedLoadState(error));
     }
@@ -1074,16 +1061,14 @@ class ChatThreadSession extends ChangeEmitter {
       return;
     }
     _markClosed();
-    await _client.sendAgentMessage(
-      CloseThread(threadId: threadPath),
-      ignoreOffline: true,
-    );
+    await _client
+        .sendAgentMessage(CloseThread(threadId: threadPath))
+        .catchError((_) {});
   }
 
-  Future<void> requestModels({bool ignoreOffline = false}) {
+  Future<void> requestModels() {
     return _client.sendAgentMessage(
       ModelsRequest(messageId: const Uuid().v4()),
-      ignoreOffline: ignoreOffline,
     );
   }
 

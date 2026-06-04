@@ -404,8 +404,14 @@ class AgentThreadStorageRepository extends ThreadStorageRepository {
     _subscription = chatClient.events.listen(_handleEvent);
     final ready = Completer<void>();
     _pendingOpen = ready;
-    await chatClient.sendAgentMessage(WatchThreads(), ignoreOffline: true);
+    await chatClient.sendAgentMessage(WatchThreads());
+    if (_closed) {
+      return;
+    }
     await _requestList();
+    if (_closed) {
+      return;
+    }
     await ready.future;
   }
 
@@ -420,9 +426,7 @@ class AgentThreadStorageRepository extends ThreadStorageRepository {
     if (pendingOpen != null && !pendingOpen.isCompleted) {
       pendingOpen.complete();
     }
-    await chatClient
-        .sendAgentMessage(UnwatchThreads(), ignoreOffline: true)
-        .catchError((_) {});
+    await chatClient.sendAgentMessage(UnwatchThreads()).catchError((_) {});
     await subscription?.cancel();
   }
 
@@ -473,7 +477,7 @@ class AgentThreadStorageRepository extends ThreadStorageRepository {
     }
     final request = ListThreads(limit: limit);
     _pendingListMessageId = request.messageId;
-    await chatClient.sendAgentMessage(request, ignoreOffline: true);
+    await chatClient.sendAgentMessage(request);
   }
 
   void _handleEvent(AgentMessageEvent event) {
@@ -508,7 +512,10 @@ class AgentThreadStorageRepository extends ThreadStorageRepository {
     if (_closed) {
       return;
     }
-    await chatClient.sendAgentMessage(WatchThreads(), ignoreOffline: true);
+    await chatClient.sendAgentMessage(WatchThreads());
+    if (_closed) {
+      return;
+    }
     await _requestList();
   }
 

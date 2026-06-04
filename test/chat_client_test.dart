@@ -20,7 +20,6 @@ class _FakeChatClient extends BaseChatClient {
   Future<void> sendAgentMessage(
     AgentMessage message, {
     Uint8List? attachment,
-    bool ignoreOffline = false,
   }) async {
     sent.add(message);
     attachments.add(attachment);
@@ -32,7 +31,6 @@ class _RejectingOpenChatClient extends BaseChatClient {
   Future<void> sendAgentMessage(
     AgentMessage message, {
     Uint8List? attachment,
-    bool ignoreOffline = false,
   }) async {
     if (message is OpenThread) {
       throw StateError('agent unavailable');

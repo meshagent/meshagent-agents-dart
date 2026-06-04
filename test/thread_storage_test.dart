@@ -11,7 +11,6 @@ class _FakeChatClient extends BaseChatClient {
   Future<void> sendAgentMessage(
     AgentMessage message, {
     Uint8List? attachment,
-    bool ignoreOffline = false,
   }) async {
     sent.add(message);
   }

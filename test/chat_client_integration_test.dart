@@ -367,7 +367,7 @@ void main() {
     });
 
     test(
-      'ignoreOffline returns when no agent participant is present',
+      'sendAgentMessage fails when no agent participant is present',
       () async {
         final suffix = const Uuid().v4();
         final room = _newRoomClient(
@@ -388,9 +388,12 @@ void main() {
         await room.messaging.enable();
         await client.start();
 
-        await client
-            .sendAgentMessage(WatchThreads(), ignoreOffline: true)
-            .timeout(const Duration(milliseconds: 250));
+        expect(
+          () => client
+              .sendAgentMessage(WatchThreads())
+              .timeout(const Duration(milliseconds: 250)),
+          throwsStateError,
+        );
       },
     );
 
