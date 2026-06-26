@@ -3,7 +3,6 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
-PYTHON_BIN="$ROOT_DIR/.venv/bin/python"
 SETUP_SERVER=true
 TEST_ARGS=()
 
@@ -15,28 +14,27 @@ for arg in "$@"; do
 done
 
 if $SETUP_SERVER; then
-    if [ ! -x "$PYTHON_BIN" ]; then
-        echo "Expected repo Python environment at $PYTHON_BIN. Set up .venv before running meshagent-agents-dart tests." >&2
+    if ! command -v cargo >/dev/null 2>&1; then
+        echo "cargo must be available when running meshagent-agents-dart tests with server setup enabled." >&2
         exit 1
     fi
 
-    export PYTHONPATH="$ROOT_DIR/meshagent-sdk/meshagent-api:$ROOT_DIR/meshagent-sdk/meshagent-agents:$ROOT_DIR/meshagent-sdk/meshagent-tools:$ROOT_DIR/meshagent-sdk/meshagent-openai:$ROOT_DIR/meshagent-sdk/meshagent-anthropic:$ROOT_DIR/meshagent-sdk/meshagent-llm-proxy:$ROOT_DIR/meshagent-sdk/meshagent-otel:$ROOT_DIR/meshagent-cloud:$ROOT_DIR/meshagent-server${PYTHONPATH:+:$PYTHONPATH}"
-
-    ROOM_INTERNAL_API_PORT=$("$PYTHON_BIN" -c "from meshagent.api.room_ports import ROOM_INTERNAL_API_PORT; print(ROOM_INTERNAL_API_PORT)")
+    ROOM_INTERNAL_API_PORT=8078
 
     export MESHAGENT_API_URL="http://localhost:${ROOM_INTERNAL_API_PORT}"
     export MESHAGENT_SECRET="test-secret-secure-secret-sample2560binarykey"
     export MESHAGENT_PROJECT_ID="testproject"
     export MESHAGENT_KEY_ID="test-key-secure-key-sample2560binarykey"
-    export MESHAGENT_SERVER_CLI_FILES_STORAGE_PATH=".local_server_documents"
+    SERVER_STORAGE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/meshagent-dart-room-server.XXXXXX")"
+    export MESHAGENT_SERVER_CLI_FILES_STORAGE_PATH="$SERVER_STORAGE_DIR"
     unset MESHAGENT_API_KEY
 
-    "$PYTHON_BIN" "$ROOT_DIR/meshagent-server/meshagent/server/cli/cli.py" &
+    cargo run --manifest-path "$ROOT_DIR/rust/Cargo.toml" -p room-server-cli &
     CLI_PID=$!
-    trap 'kill $CLI_PID 2>/dev/null || true' EXIT
+    trap 'kill $CLI_PID 2>/dev/null || true; rm -rf "$SERVER_STORAGE_DIR"' EXIT
 
     SERVER_READY=false
-    for _ in $(seq 1 60); do
+    for _ in $(seq 1 180); do
         if curl -fsS "$MESHAGENT_API_URL/" >/dev/null; then
             SERVER_READY=true
             break
