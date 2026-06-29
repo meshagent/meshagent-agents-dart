@@ -194,16 +194,14 @@ class DatasetThreadStorageRepository extends ThreadStorageRepository {
     _initialSnapshotReady = false;
     _closed = true;
     if (subscription != null) {
-      try {
-        await subscription.cancel().timeout(_closeTimeout);
-      } catch (_) {}
+      unawaited(
+        subscription.cancel().timeout(_closeTimeout).catchError((_) {}),
+      );
     }
     final refreshEntriesFuture = _refreshEntriesFuture;
     _refreshEntriesFuture = null;
     if (refreshEntriesFuture != null) {
-      try {
-        await refreshEntriesFuture.timeout(_closeTimeout);
-      } catch (_) {}
+      unawaited(refreshEntriesFuture.timeout(_closeTimeout).catchError((_) {}));
     }
   }
 
