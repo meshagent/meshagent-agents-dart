@@ -135,6 +135,7 @@ class DatasetThreadStorageRepository extends ThreadStorageRepository {
     ArrowField(name: 'created_at', type: ArrowUtf8Type()),
     ArrowField(name: 'modified_at', type: ArrowUtf8Type()),
   ]);
+  static const Duration _closeTimeout = Duration(seconds: 5);
 
   final RoomClient room;
   final String path;
@@ -192,12 +193,16 @@ class DatasetThreadStorageRepository extends ThreadStorageRepository {
     _subscription = null;
     _initialSnapshotReady = false;
     _closed = true;
-    await subscription?.cancel();
+    if (subscription != null) {
+      try {
+        await subscription.cancel().timeout(_closeTimeout);
+      } catch (_) {}
+    }
     final refreshEntriesFuture = _refreshEntriesFuture;
     _refreshEntriesFuture = null;
     if (refreshEntriesFuture != null) {
       try {
-        await refreshEntriesFuture;
+        await refreshEntriesFuture.timeout(_closeTimeout);
       } catch (_) {}
     }
   }
