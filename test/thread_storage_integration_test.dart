@@ -7,6 +7,10 @@ import 'package:uuid/uuid.dart';
 const _secret = 'test-secret-secure-secret-sample2560binarykey';
 
 String? get _serverSkipReason {
+  if (Platform.environment['RUN_MESHAGENT_DATASET_THREAD_STORAGE_TESTS'] !=
+      '1') {
+    return 'Set RUN_MESHAGENT_DATASET_THREAD_STORAGE_TESTS=1 to run.';
+  }
   if ((Platform.environment['MESHAGENT_API_URL'] ?? '').isEmpty) {
     return 'MESHAGENT_API_URL must point at a local roomserver.';
   }
