@@ -1,7 +1,7 @@
 name: meshagent_agents
 description: Agent chat sessions and clients for Meshagent Dart applications.
 homepage: https://www.meshagent.com
-version: 0.45.1
+version: 0.45.2
 
 environment:
   sdk: ^3.10.0
@@ -9,7 +9,7 @@ environment:
 resolution: workspace
 
 dependencies:
-  meshagent: ^0.45.1
+  meshagent: ^0.45.2
   msgpack_dart: ^1.0.1
   uuid: ^4.5.1
   web_socket_channel: ^3.0.3
