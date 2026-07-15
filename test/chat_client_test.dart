@@ -7,7 +7,11 @@ import 'package:msgpack_dart/msgpack_dart.dart' as msgpack;
 import 'package:test/test.dart';
 
 class _FakeChatClient extends BaseChatClient {
-  _FakeChatClient({this.participantName});
+  _FakeChatClient({
+    this.participantName,
+    super.threadCreatedPendingStartMatcher,
+    super.deduplicateClientToolRequests,
+  });
 
   final String? participantName;
   final sent = <AgentMessage>[];
@@ -635,6 +639,39 @@ void main() {
     },
   );
 
+  test('optional client tool guard keeps successful requests claimed', () {
+    final client = _FakeChatClient(deduplicateClientToolRequests: true);
+    final session = client.openThread('dataset://threads/example', load: false);
+
+    expect(session.claimClientToolCall('request-1'), isTrue);
+    session.finishClientToolCall('request-1', responseSent: true);
+    expect(session.claimClientToolCall('request-1'), isFalse);
+  });
+
+  test(
+    'optional client tool guard releases requests whose response failed',
+    () {
+      final client = _FakeChatClient(deduplicateClientToolRequests: true);
+      final session = client.openThread(
+        'dataset://threads/example',
+        load: false,
+      );
+
+      expect(session.claimClientToolCall('request-1'), isTrue);
+      session.finishClientToolCall('request-1', responseSent: false);
+      expect(session.claimClientToolCall('request-1'), isTrue);
+    },
+  );
+
+  test('client tool guard remains disabled by default', () {
+    final client = _FakeChatClient();
+    final session = client.openThread('dataset://threads/example', load: false);
+
+    expect(session.claimClientToolCall('request-1'), isTrue);
+    session.finishClientToolCall('request-1', responseSent: true);
+    expect(session.claimClientToolCall('request-1'), isTrue);
+  });
+
   test(
     'openThread reuses already open sessions without replay by default',
     () async {
@@ -836,6 +873,57 @@ void main() {
     expect(createdEvents, hasLength(1));
     expect(createdEvents.single.thread.name, 'Server Generated Name');
   });
+
+  test(
+    'optional ThreadCreated matcher resolves the start and drains queued client tool calls',
+    () async {
+      final client = _FakeChatClient(
+        participantName: 'Dinesh',
+        threadCreatedPendingStartMatcher: (message, candidates) {
+          expect(candidates.single.senderName, 'Dinesh');
+          return candidates.single.messageId;
+        },
+      );
+      final startFuture = client.startThread(
+        messageId: 'client-message-1',
+        message: 'create a website',
+        attachments: const <AgentFileContent>[],
+      );
+
+      final toolRequest = AgentMessage.fromJson({
+        'type': agentClientToolCallRequestedType,
+        'message_id': 'request-message-1',
+        'thread_id': 'dataset://threads/created',
+        'turn_id': 'turn-1',
+        'request_id': 'request-1',
+        'provider': 'openai',
+        'model': 'gpt-5.5',
+        'toolkit': 'client',
+        'tool': 'list_webserver_files',
+        'arguments': <String, Object?>{},
+      });
+      client.handleAgentMessage(toolRequest);
+      client.handleAgentMessage(
+        ThreadCreated(
+          thread: const AgentThreadListEntry(
+            path: 'dataset://threads/created',
+            name: 'Website',
+            createdAt: '2026-07-15T03:24:12.000Z',
+            modifiedAt: '2026-07-15T03:24:12.000Z',
+          ),
+        ),
+      );
+
+      final result = await startFuture;
+      expect(result.threadPath, 'dataset://threads/created');
+      expect(
+        result.session.messages
+            .map((event) => event.message)
+            .whereType<AgentClientToolCallRequested>(),
+        contains(same(toolRequest)),
+      );
+    },
+  );
 
   test(
     'keeps new-thread lifecycle messages that arrive before the session opens',

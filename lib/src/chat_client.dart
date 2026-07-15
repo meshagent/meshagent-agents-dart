@@ -145,16 +145,50 @@ class ChatThreadStartResult {
   final Map<String, dynamic>? realtimeConnection;
 }
 
+class PendingThreadStartCandidate {
+  const PendingThreadStartCandidate({
+    required this.messageId,
+    required this.senderName,
+  });
+
+  final String messageId;
+  final String? senderName;
+}
+
+typedef ThreadCreatedPendingStartMatcher =
+    String? Function(
+      ThreadCreated message,
+      List<PendingThreadStartCandidate> candidates,
+    );
+
+class _PendingThreadStartRequest {
+  const _PendingThreadStartRequest({
+    required this.request,
+    required this.completer,
+  });
+
+  final StartThread request;
+  final Completer<AgentMessage> completer;
+}
+
 abstract class BaseChatClient extends ChangeEmitter {
+  BaseChatClient({
+    this.threadCreatedPendingStartMatcher,
+    this.deduplicateClientToolRequests = false,
+  });
+
+  final ThreadCreatedPendingStartMatcher? threadCreatedPendingStartMatcher;
+  final bool deduplicateClientToolRequests;
   final Map<String, ChatThreadSession> _sessionsByPath =
       <String, ChatThreadSession>{};
-  final Map<String, Completer<AgentMessage>> _pendingStartRequests =
-      <String, Completer<AgentMessage>>{};
+  final Map<String, _PendingThreadStartRequest> _pendingStartRequests =
+      <String, _PendingThreadStartRequest>{};
   final Map<String, List<AgentMessageEvent>> _pendingSessionEventsByPath =
       <String, List<AgentMessageEvent>>{};
   final StreamController<AgentMessageEvent> _events =
       StreamController<AgentMessageEvent>.broadcast();
   AgentConnectionStatus? _connectionStatus;
+  final Set<String> _claimedClientToolRequests = <String>{};
 
   Stream<AgentMessageEvent> get events => _events.stream;
 
@@ -174,6 +208,37 @@ abstract class BaseChatClient extends ChangeEmitter {
   String? _cleanParticipantName(String? value) {
     final trimmed = value?.trim();
     return trimmed == null || trimmed.isEmpty ? null : trimmed;
+  }
+
+  String? _clientToolRequestKey(String threadPath, String requestId) {
+    final normalizedThreadPath = threadPath.trim();
+    final normalizedRequestId = requestId.trim();
+    if (normalizedThreadPath.isEmpty || normalizedRequestId.isEmpty) {
+      return null;
+    }
+    return '$normalizedThreadPath\n$normalizedRequestId';
+  }
+
+  bool _claimClientToolRequest(String threadPath, String requestId) {
+    if (!deduplicateClientToolRequests) {
+      return true;
+    }
+    final key = _clientToolRequestKey(threadPath, requestId);
+    return key == null || _claimedClientToolRequests.add(key);
+  }
+
+  void _finishClientToolRequest(
+    String threadPath,
+    String requestId, {
+    required bool responseSent,
+  }) {
+    if (!deduplicateClientToolRequests || responseSent) {
+      return;
+    }
+    final key = _clientToolRequestKey(threadPath, requestId);
+    if (key != null) {
+      _claimedClientToolRequests.remove(key);
+    }
   }
 
   ChatThreadSession openThread(
@@ -251,7 +316,10 @@ abstract class BaseChatClient extends ChangeEmitter {
           : null,
     );
     final completer = Completer<AgentMessage>();
-    _pendingStartRequests[resolvedMessageId] = completer;
+    _pendingStartRequests[resolvedMessageId] = _PendingThreadStartRequest(
+      request: payload,
+      completer: completer,
+    );
     try {
       await sendAgentMessage(payload);
       final response = await completer.future;
@@ -335,9 +403,12 @@ abstract class BaseChatClient extends ChangeEmitter {
         sourceMessageId != null &&
         sourceMessageId.trim().isNotEmpty) {
       final pending = _pendingStartRequests[sourceMessageId.trim()];
-      if (pending != null && !pending.isCompleted) {
-        pending.complete(message);
+      if (pending != null && !pending.completer.isCompleted) {
+        pending.completer.complete(message);
       }
+    }
+    if (message is ThreadCreated) {
+      _acknowledgePendingStartFromThreadCreated(message);
     }
     final threadPath = message is AgentThreadMessage
         ? message.threadId.trim()
@@ -360,6 +431,45 @@ abstract class BaseChatClient extends ChangeEmitter {
       );
     }
     notifyListeners();
+  }
+
+  void _acknowledgePendingStartFromThreadCreated(ThreadCreated message) {
+    final matcher = threadCreatedPendingStartMatcher;
+    final threadPath = message.thread.path.trim();
+    if (matcher == null || threadPath.isEmpty) {
+      return;
+    }
+
+    final candidates = _pendingStartRequests.entries
+        .where((entry) => !entry.value.completer.isCompleted)
+        .map(
+          (entry) => PendingThreadStartCandidate(
+            messageId: entry.key,
+            senderName: entry.value.request.senderName,
+          ),
+        )
+        .toList(growable: false);
+    if (candidates.isEmpty) {
+      return;
+    }
+
+    String? matchedMessageId;
+    try {
+      matchedMessageId = matcher(message, candidates)?.trim();
+    } catch (_) {
+      return;
+    }
+    if (matchedMessageId == null || matchedMessageId.isEmpty) {
+      return;
+    }
+
+    final pending = _pendingStartRequests[matchedMessageId];
+    if (pending == null || pending.completer.isCompleted) {
+      return;
+    }
+    pending.completer.complete(
+      ThreadStarted(sourceMessageId: matchedMessageId, threadId: threadPath),
+    );
   }
 
   void _drainPendingSessionEvents(
@@ -405,7 +515,12 @@ abstract class BaseChatClient extends ChangeEmitter {
 }
 
 class MessagingChatClient extends BaseChatClient {
-  MessagingChatClient({required this.room, this.agentName}) {
+  MessagingChatClient({
+    required this.room,
+    this.agentName,
+    super.threadCreatedPendingStartMatcher,
+    super.deduplicateClientToolRequests,
+  }) {
     _attachListeners();
   }
 
@@ -1110,6 +1225,18 @@ class ChatThreadSession extends ChangeEmitter {
         requestId: requestId,
         response: response,
       ),
+    );
+  }
+
+  bool claimClientToolCall(String requestId) {
+    return _client._claimClientToolRequest(threadPath, requestId);
+  }
+
+  void finishClientToolCall(String requestId, {required bool responseSent}) {
+    _client._finishClientToolRequest(
+      threadPath,
+      requestId,
+      responseSent: responseSent,
     );
   }
 
