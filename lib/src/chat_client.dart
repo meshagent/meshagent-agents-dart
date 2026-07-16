@@ -205,6 +205,8 @@ abstract class BaseChatClient extends ChangeEmitter {
 
   String? localParticipantName() => null;
 
+  String? localParticipantId() => null;
+
   String? _cleanParticipantName(String? value) {
     final trimmed = value?.trim();
     return trimmed == null || trimmed.isEmpty ? null : trimmed;
@@ -388,6 +390,14 @@ abstract class BaseChatClient extends ChangeEmitter {
     DateTime? createdAt,
     Uint8List? attachment,
   }) {
+    if (message is AgentClientToolCallRequested) {
+      final targetParticipantId = message.targetParticipantId?.trim();
+      if (targetParticipantId != null &&
+          targetParticipantId.isNotEmpty &&
+          targetParticipantId != localParticipantId()) {
+        return;
+      }
+    }
     if (message is AgentConnectionStatus) {
       _connectionStatus = message;
     }
@@ -519,7 +529,7 @@ class MessagingChatClient extends BaseChatClient {
     required this.room,
     this.agentName,
     super.threadCreatedPendingStartMatcher,
-    super.deduplicateClientToolRequests,
+    super.deduplicateClientToolRequests = true,
   }) {
     _attachListeners();
   }
@@ -540,6 +550,9 @@ class MessagingChatClient extends BaseChatClient {
     final name = room.localParticipant?.getAttribute('name');
     return name is String ? _cleanParticipantName(name) : null;
   }
+
+  @override
+  String? localParticipantId() => room.localParticipant?.id;
 
   @override
   Future<void> start() async {
@@ -790,7 +803,7 @@ class WebSocketChatClient extends BaseChatClient {
     this.reconnect = true,
     this.reconnectInitialDelay = const Duration(seconds: 1),
     this.reconnectMaxDelay = const Duration(seconds: 10),
-  });
+  }) : super(deduplicateClientToolRequests: true);
 
   final Uri url;
   final String token;
@@ -809,11 +822,15 @@ class WebSocketChatClient extends BaseChatClient {
   bool _connecting = false;
   int _reconnectAttempts = 0;
   Timer? _reconnectTimer;
+  String? _assignedParticipantId;
 
   bool get isConnected => _webSocket != null;
 
   @override
   String? localParticipantName() => _cleanParticipantName(participantName);
+
+  @override
+  String? localParticipantId() => _assignedParticipantId;
 
   @override
   Future<void> start() async {
@@ -835,6 +852,7 @@ class WebSocketChatClient extends BaseChatClient {
       protocols: _resolvedProtocols(),
     );
     _webSocket = webSocket;
+    _assignedParticipantId = null;
     try {
       await webSocket.ready;
     } catch (error) {
@@ -896,6 +914,7 @@ class WebSocketChatClient extends BaseChatClient {
     _reconnectTimer = null;
     final webSocket = _webSocket;
     _webSocket = null;
+    _assignedParticipantId = null;
     await _subscription?.cancel();
     _subscription = null;
     await webSocket?.sink.close(websocket_status.normalClosure);
@@ -936,6 +955,7 @@ class WebSocketChatClient extends BaseChatClient {
     _closeCode = webSocket.closeCode;
     _closeReason = webSocket.closeReason;
     _webSocket = null;
+    _assignedParticipantId = null;
     _subscription = null;
     if (_stopping || !_started) {
       notifyListeners();
@@ -1052,7 +1072,14 @@ class WebSocketChatClient extends BaseChatClient {
       if (decoded is! Map) {
         throw StateError('chat websocket received a non-object message');
       }
-      handleAgentMessage(AgentMessage.fromJson(_stringKeyMap(decoded)));
+      final message = AgentMessage.fromJson(_stringKeyMap(decoded));
+      if (message is AgentConnectionStatus) {
+        final participantId = message.participantId?.trim();
+        if (participantId != null && participantId.isNotEmpty) {
+          _assignedParticipantId = participantId;
+        }
+      }
+      handleAgentMessage(message);
     } catch (error) {
       _receiveError = error;
       emitConnectionStatus(

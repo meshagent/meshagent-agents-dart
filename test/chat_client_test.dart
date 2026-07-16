@@ -1318,6 +1318,13 @@ void main() {
               : '',
         );
         sockets.add(socket);
+        socket.add(
+          msgpack.serialize(<String, dynamic>{
+            'type': agentConnectionStatusType,
+            'status': 'connected',
+            'participant_id': 'websocket-participant-${sockets.length}',
+          }),
+        );
         socketEvents.add(socket);
       }
     }());
@@ -1359,6 +1366,9 @@ void main() {
     });
 
     await client.start();
+    await _waitFor(
+      () => client.localParticipantId() == 'websocket-participant-1',
+    );
     final clientEvents = <AgentConnectionStatus>[];
     final clientEventSubscription = client.events.listen((event) {
       final message = event.message;
@@ -1385,6 +1395,9 @@ void main() {
       isEmpty,
     );
     final secondSocket = await waitForSocket(1);
+    await _waitFor(
+      () => client.localParticipantId() == 'websocket-participant-2',
+    );
     final reopened = await waitForPayload(secondSocket, agentThreadOpenType);
 
     expect(reopened, containsPair('thread_id', session.threadPath));

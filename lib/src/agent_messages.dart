@@ -2624,6 +2624,7 @@ class AgentClientToolCallRequested extends AgentLLMMessage {
     required super.threadId,
     required this.turnId,
     required this.requestId,
+    this.targetParticipantId,
     required this.toolkit,
     required this.tool,
     super.messageId,
@@ -2636,6 +2637,7 @@ class AgentClientToolCallRequested extends AgentLLMMessage {
 
   final String turnId;
   final String requestId;
+  final String? targetParticipantId;
   final String toolkit;
   final String tool;
   final Map<String, dynamic> arguments;
@@ -2649,6 +2651,7 @@ class AgentClientToolCallRequested extends AgentLLMMessage {
         model: _stringOrNull(json['model']),
         turnId: _requiredString(json, 'turn_id'),
         requestId: _requiredString(json, 'request_id'),
+        targetParticipantId: _stringOrNull(json['target_participant_id']),
         toolkit: _requiredString(json, 'toolkit'),
         tool: _requiredString(json, 'tool'),
         arguments: _dynamicMapOrNull(json['arguments']),
@@ -2659,6 +2662,8 @@ class AgentClientToolCallRequested extends AgentLLMMessage {
     ..addAll(<String, dynamic>{
       'turn_id': turnId,
       'request_id': requestId,
+      if (targetParticipantId != null)
+        'target_participant_id': targetParticipantId,
       'toolkit': toolkit,
       'tool': tool,
       'arguments': arguments,
@@ -2670,6 +2675,7 @@ class AgentClientToolCallCancelled extends AgentLLMMessage {
     required super.threadId,
     required this.turnId,
     required this.requestId,
+    this.targetParticipantId,
     required this.toolkit,
     required this.tool,
     super.messageId,
@@ -2681,6 +2687,7 @@ class AgentClientToolCallCancelled extends AgentLLMMessage {
 
   final String turnId;
   final String requestId;
+  final String? targetParticipantId;
   final String toolkit;
   final String tool;
   final String? reason;
@@ -2694,6 +2701,7 @@ class AgentClientToolCallCancelled extends AgentLLMMessage {
         model: _stringOrNull(json['model']),
         turnId: _requiredString(json, 'turn_id'),
         requestId: _requiredString(json, 'request_id'),
+        targetParticipantId: _stringOrNull(json['target_participant_id']),
         toolkit: _requiredString(json, 'toolkit'),
         tool: _requiredString(json, 'tool'),
         reason: _stringOrNull(json['reason']),
@@ -2704,6 +2712,8 @@ class AgentClientToolCallCancelled extends AgentLLMMessage {
     ..addAll(<String, dynamic>{
       'turn_id': turnId,
       'request_id': requestId,
+      if (targetParticipantId != null)
+        'target_participant_id': targetParticipantId,
       'toolkit': toolkit,
       'tool': tool,
       if (reason != null) 'reason': reason,
@@ -2771,12 +2781,14 @@ class AgentConnectionStatus extends AgentMessage {
     this.message,
     this.reason,
     this.retryInSeconds,
+    this.participantId,
   }) : super(type: agentConnectionStatusType);
 
   final String status;
   final String? message;
   final String? reason;
   final double? retryInSeconds;
+  final String? participantId;
 
   factory AgentConnectionStatus.fromJson(Map<String, dynamic> json) =>
       AgentConnectionStatus(
@@ -2786,6 +2798,7 @@ class AgentConnectionStatus extends AgentMessage {
         message: _stringOrNull(json['message']),
         reason: _stringOrNull(json['reason']),
         retryInSeconds: _doubleOrNull(json['retry_in_seconds']),
+        participantId: _stringOrNull(json['participant_id']),
       );
 
   @override
@@ -2795,6 +2808,7 @@ class AgentConnectionStatus extends AgentMessage {
       if (message != null) 'message': message,
       if (reason != null) 'reason': reason,
       if (retryInSeconds != null) 'retry_in_seconds': retryInSeconds,
+      if (participantId != null) 'participant_id': participantId,
     });
 }
 
