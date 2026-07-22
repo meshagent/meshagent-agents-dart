@@ -145,16 +145,50 @@ class ChatThreadStartResult {
   final Map<String, dynamic>? realtimeConnection;
 }
 
+class PendingThreadStartCandidate {
+  const PendingThreadStartCandidate({
+    required this.messageId,
+    required this.senderName,
+  });
+
+  final String messageId;
+  final String? senderName;
+}
+
+typedef ThreadCreatedPendingStartMatcher =
+    String? Function(
+      ThreadCreated message,
+      List<PendingThreadStartCandidate> candidates,
+    );
+
+class _PendingThreadStartRequest {
+  const _PendingThreadStartRequest({
+    required this.request,
+    required this.completer,
+  });
+
+  final StartThread request;
+  final Completer<AgentMessage> completer;
+}
+
 abstract class BaseChatClient extends ChangeEmitter {
+  BaseChatClient({
+    this.threadCreatedPendingStartMatcher,
+    this.deduplicateClientToolRequests = false,
+  });
+
+  final ThreadCreatedPendingStartMatcher? threadCreatedPendingStartMatcher;
+  final bool deduplicateClientToolRequests;
   final Map<String, ChatThreadSession> _sessionsByPath =
       <String, ChatThreadSession>{};
-  final Map<String, Completer<AgentMessage>> _pendingStartRequests =
-      <String, Completer<AgentMessage>>{};
+  final Map<String, _PendingThreadStartRequest> _pendingStartRequests =
+      <String, _PendingThreadStartRequest>{};
   final Map<String, List<AgentMessageEvent>> _pendingSessionEventsByPath =
       <String, List<AgentMessageEvent>>{};
   final StreamController<AgentMessageEvent> _events =
       StreamController<AgentMessageEvent>.broadcast();
   AgentConnectionStatus? _connectionStatus;
+  final Set<String> _claimedClientToolRequests = <String>{};
 
   Stream<AgentMessageEvent> get events => _events.stream;
 
@@ -171,9 +205,42 @@ abstract class BaseChatClient extends ChangeEmitter {
 
   String? localParticipantName() => null;
 
+  String? localParticipantId() => null;
+
   String? _cleanParticipantName(String? value) {
     final trimmed = value?.trim();
     return trimmed == null || trimmed.isEmpty ? null : trimmed;
+  }
+
+  String? _clientToolRequestKey(String threadPath, String requestId) {
+    final normalizedThreadPath = threadPath.trim();
+    final normalizedRequestId = requestId.trim();
+    if (normalizedThreadPath.isEmpty || normalizedRequestId.isEmpty) {
+      return null;
+    }
+    return '$normalizedThreadPath\n$normalizedRequestId';
+  }
+
+  bool _claimClientToolRequest(String threadPath, String requestId) {
+    if (!deduplicateClientToolRequests) {
+      return true;
+    }
+    final key = _clientToolRequestKey(threadPath, requestId);
+    return key == null || _claimedClientToolRequests.add(key);
+  }
+
+  void _finishClientToolRequest(
+    String threadPath,
+    String requestId, {
+    required bool responseSent,
+  }) {
+    if (!deduplicateClientToolRequests || responseSent) {
+      return;
+    }
+    final key = _clientToolRequestKey(threadPath, requestId);
+    if (key != null) {
+      _claimedClientToolRequests.remove(key);
+    }
   }
 
   ChatThreadSession openThread(
@@ -251,7 +318,10 @@ abstract class BaseChatClient extends ChangeEmitter {
           : null,
     );
     final completer = Completer<AgentMessage>();
-    _pendingStartRequests[resolvedMessageId] = completer;
+    _pendingStartRequests[resolvedMessageId] = _PendingThreadStartRequest(
+      request: payload,
+      completer: completer,
+    );
     try {
       await sendAgentMessage(payload);
       final response = await completer.future;
@@ -320,6 +390,14 @@ abstract class BaseChatClient extends ChangeEmitter {
     DateTime? createdAt,
     Uint8List? attachment,
   }) {
+    if (message is AgentClientToolCallRequested) {
+      final targetParticipantId = message.targetParticipantId?.trim();
+      if (targetParticipantId != null &&
+          targetParticipantId.isNotEmpty &&
+          targetParticipantId != localParticipantId()) {
+        return;
+      }
+    }
     if (message is AgentConnectionStatus) {
       _connectionStatus = message;
     }
@@ -335,9 +413,12 @@ abstract class BaseChatClient extends ChangeEmitter {
         sourceMessageId != null &&
         sourceMessageId.trim().isNotEmpty) {
       final pending = _pendingStartRequests[sourceMessageId.trim()];
-      if (pending != null && !pending.isCompleted) {
-        pending.complete(message);
+      if (pending != null && !pending.completer.isCompleted) {
+        pending.completer.complete(message);
       }
+    }
+    if (message is ThreadCreated) {
+      _acknowledgePendingStartFromThreadCreated(message);
     }
     final threadPath = message is AgentThreadMessage
         ? message.threadId.trim()
@@ -360,6 +441,45 @@ abstract class BaseChatClient extends ChangeEmitter {
       );
     }
     notifyListeners();
+  }
+
+  void _acknowledgePendingStartFromThreadCreated(ThreadCreated message) {
+    final matcher = threadCreatedPendingStartMatcher;
+    final threadPath = message.thread.path.trim();
+    if (matcher == null || threadPath.isEmpty) {
+      return;
+    }
+
+    final candidates = _pendingStartRequests.entries
+        .where((entry) => !entry.value.completer.isCompleted)
+        .map(
+          (entry) => PendingThreadStartCandidate(
+            messageId: entry.key,
+            senderName: entry.value.request.senderName,
+          ),
+        )
+        .toList(growable: false);
+    if (candidates.isEmpty) {
+      return;
+    }
+
+    String? matchedMessageId;
+    try {
+      matchedMessageId = matcher(message, candidates)?.trim();
+    } catch (_) {
+      return;
+    }
+    if (matchedMessageId == null || matchedMessageId.isEmpty) {
+      return;
+    }
+
+    final pending = _pendingStartRequests[matchedMessageId];
+    if (pending == null || pending.completer.isCompleted) {
+      return;
+    }
+    pending.completer.complete(
+      ThreadStarted(sourceMessageId: matchedMessageId, threadId: threadPath),
+    );
   }
 
   void _drainPendingSessionEvents(
@@ -405,7 +525,12 @@ abstract class BaseChatClient extends ChangeEmitter {
 }
 
 class MessagingChatClient extends BaseChatClient {
-  MessagingChatClient({required this.room, this.agentName}) {
+  MessagingChatClient({
+    required this.room,
+    this.agentName,
+    super.threadCreatedPendingStartMatcher,
+    super.deduplicateClientToolRequests = true,
+  }) {
     _attachListeners();
   }
 
@@ -425,6 +550,9 @@ class MessagingChatClient extends BaseChatClient {
     final name = room.localParticipant?.getAttribute('name');
     return name is String ? _cleanParticipantName(name) : null;
   }
+
+  @override
+  String? localParticipantId() => room.localParticipant?.id;
 
   @override
   Future<void> start() async {
@@ -675,7 +803,7 @@ class WebSocketChatClient extends BaseChatClient {
     this.reconnect = true,
     this.reconnectInitialDelay = const Duration(seconds: 1),
     this.reconnectMaxDelay = const Duration(seconds: 10),
-  });
+  }) : super(deduplicateClientToolRequests: true);
 
   final Uri url;
   final String token;
@@ -694,11 +822,15 @@ class WebSocketChatClient extends BaseChatClient {
   bool _connecting = false;
   int _reconnectAttempts = 0;
   Timer? _reconnectTimer;
+  String? _assignedParticipantId;
 
   bool get isConnected => _webSocket != null;
 
   @override
   String? localParticipantName() => _cleanParticipantName(participantName);
+
+  @override
+  String? localParticipantId() => _assignedParticipantId;
 
   @override
   Future<void> start() async {
@@ -720,6 +852,7 @@ class WebSocketChatClient extends BaseChatClient {
       protocols: _resolvedProtocols(),
     );
     _webSocket = webSocket;
+    _assignedParticipantId = null;
     try {
       await webSocket.ready;
     } catch (error) {
@@ -781,6 +914,7 @@ class WebSocketChatClient extends BaseChatClient {
     _reconnectTimer = null;
     final webSocket = _webSocket;
     _webSocket = null;
+    _assignedParticipantId = null;
     await _subscription?.cancel();
     _subscription = null;
     await webSocket?.sink.close(websocket_status.normalClosure);
@@ -821,6 +955,7 @@ class WebSocketChatClient extends BaseChatClient {
     _closeCode = webSocket.closeCode;
     _closeReason = webSocket.closeReason;
     _webSocket = null;
+    _assignedParticipantId = null;
     _subscription = null;
     if (_stopping || !_started) {
       notifyListeners();
@@ -937,7 +1072,14 @@ class WebSocketChatClient extends BaseChatClient {
       if (decoded is! Map) {
         throw StateError('chat websocket received a non-object message');
       }
-      handleAgentMessage(AgentMessage.fromJson(_stringKeyMap(decoded)));
+      final message = AgentMessage.fromJson(_stringKeyMap(decoded));
+      if (message is AgentConnectionStatus) {
+        final participantId = message.participantId?.trim();
+        if (participantId != null && participantId.isNotEmpty) {
+          _assignedParticipantId = participantId;
+        }
+      }
+      handleAgentMessage(message);
     } catch (error) {
       _receiveError = error;
       emitConnectionStatus(
@@ -1110,6 +1252,18 @@ class ChatThreadSession extends ChangeEmitter {
         requestId: requestId,
         response: response,
       ),
+    );
+  }
+
+  bool claimClientToolCall(String requestId) {
+    return _client._claimClientToolRequest(threadPath, requestId);
+  }
+
+  void finishClientToolCall(String requestId, {required bool responseSent}) {
+    _client._finishClientToolRequest(
+      threadPath,
+      requestId,
+      responseSent: responseSent,
     );
   }
 

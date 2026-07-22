@@ -8,6 +8,9 @@ import 'package:test/test.dart';
 import 'package:uuid/uuid.dart';
 
 const _secret = 'test-secret-secure-secret-sample2560binarykey';
+const _startPrompt =
+    'Reply with a short sentence that includes LIVE_CHAT_START_OK.';
+const _startResponseMarker = 'LIVE_CHAT_START_OK';
 
 String? get _liveSkipReason {
   if (Platform.environment['RUN_MESHAGENT_LIVE_ASSISTANT_TESTS'] != '1') {
@@ -125,6 +128,28 @@ Future<AgentMessage> _waitForSessionMessage(
   );
 }
 
+Future<String> _waitForTurnText(
+  ChatThreadSession session,
+  String turnId,
+  String marker,
+  String label, {
+  Duration timeout = const Duration(seconds: 90),
+}) async {
+  final deadline = DateTime.now().add(timeout);
+  while (DateTime.now().isBefore(deadline)) {
+    final text = _turnText(session, turnId);
+    if (text.contains(marker)) {
+      return text;
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+  }
+  fail(
+    '$label was not observed. Assistant text for turn $turnId: '
+    '${_turnText(session, turnId)}. Observed session events: '
+    '${_summarize(session.messages.map((event) => event.message).toList())}',
+  );
+}
+
 String _liveId(String prefix) {
   return '$prefix-${DateTime.now().millisecondsSinceEpoch}-${const Uuid().v4()}';
 }
@@ -147,6 +172,31 @@ String _summarize(List<AgentMessage> messages) {
         return parts.join(' ');
       })
       .join(', ');
+}
+
+String _turnText(ChatThreadSession session, String turnId) {
+  return session.messages
+      .map((event) => event.message)
+      .whereType<AgentTextContentDelta>()
+      .where((message) => message.turnId == turnId)
+      .map((message) => message.text)
+      .join();
+}
+
+String _inputTextForTurn(ChatThreadSession session, String turnId) {
+  final content = <AgentInputContent>[];
+  for (final event in session.messages) {
+    final message = event.message;
+    if (message is TurnStart && message.turnId == turnId) {
+      content.addAll(message.content);
+    } else if (message is TurnStartAccepted && message.turnId == turnId) {
+      content.addAll(message.content);
+    }
+  }
+  return content
+      .whereType<AgentTextContent>()
+      .map((entry) => entry.text)
+      .join('\n');
 }
 
 String? _sourceMessageId(AgentMessage message) {
@@ -213,6 +263,7 @@ void main() {
     StreamSubscription<AgentMessageEvent>? eventSubscription;
     ChatThreadSession? session;
     String? createdThreadPath;
+    String? initialTurnId;
     final observedMessages = <AgentMessage>[];
 
     setUpAll(() async {
@@ -240,6 +291,21 @@ void main() {
         timeout: const Duration(seconds: 30),
         description: 'assistant participant',
       );
+      final agentParticipant = chatClient.agentParticipant();
+      expect(agentParticipant, isNotNull);
+      expect(
+        agentParticipant!.getAttribute('meshagent.chatbot.threading'),
+        'default-new',
+        reason: 'the process agent must advertise the multi-thread chat mode',
+      );
+      final advertisedThreadDir = agentParticipant.getAttribute(
+        'meshagent.chatbot.thread-dir',
+      );
+      expect(advertisedThreadDir, startsWith('dataset://'));
+      expect(
+        agentParticipant.getAttribute('meshagent.chatbot.thread-list'),
+        '$advertisedThreadDir/index',
+      );
       await chatClient.start();
       await threadList.open().timeout(const Duration(seconds: 15));
     });
@@ -260,8 +326,7 @@ void main() {
             .startThread(
               messageId: messageId,
               name: 'Live Dart chat test ${DateTime.now().toIso8601String()}',
-              message:
-                  'Reply with a short sentence that includes LIVE_CHAT_START_OK.',
+              message: _startPrompt,
               attachments: const <AgentFileContent>[],
               outputModalities: const ['text'],
               senderName: 'live-dart-test',
@@ -297,25 +362,42 @@ void main() {
                 )
                 as TurnStartAccepted;
 
-        await _waitForObservedMessage(
-          observedMessages,
-          0,
-          (message) =>
-              message is TurnStarted &&
-              message.threadId == createdThreadPath! &&
-              message.sourceMessageId == messageId &&
-              message.turnId == accepted.turnId,
-          'thread start turn started',
-        );
+        final started =
+            await _waitForObservedMessage(
+                  observedMessages,
+                  0,
+                  (message) =>
+                      message is TurnStarted &&
+                      message.threadId == createdThreadPath! &&
+                      message.sourceMessageId == messageId &&
+                      message.turnId == accepted.turnId,
+                  'thread start turn started',
+                )
+                as TurnStarted;
+        initialTurnId = started.turnId;
 
-        await _waitForSessionMessage(
+        final responseText = await _waitForTurnText(
           session!,
-          (message) =>
-              message is AgentTextContentDelta &&
-              message.threadId == createdThreadPath! &&
-              message.turnId == accepted.turnId,
-          'thread start assistant text',
+          started.turnId,
+          _startResponseMarker,
+          'thread start assistant response marker',
         );
+        expect(responseText, contains(_startResponseMarker));
+
+        final ended =
+            await _waitForObservedMessage(
+                  observedMessages,
+                  0,
+                  (message) =>
+                      message is TurnEnded &&
+                      message.threadId == createdThreadPath! &&
+                      message.turnId == started.turnId,
+                  'thread start turn ended',
+                )
+                as TurnEnded;
+        expect(ended.error, isNull);
+        expect(session!.lastCompletedTurnId, started.turnId);
+        expect(session!.pendingInputs, isEmpty);
 
         final threadPath = createdThreadPath!;
         await _waitForObservedMessage(
@@ -343,25 +425,85 @@ void main() {
     );
 
     test(
-      'loads the created thread and replays messages on the same session',
+      'loads the completed thread into a cold client and replays its content',
       () async {
-        final beforeObservedCount = observedMessages.length;
-        final opened = chatClient.openThread(
-          createdThreadPath!,
-          load: true,
-          reloadIfOpen: true,
+        final previousSession = session!;
+
+        await eventSubscription?.cancel();
+        eventSubscription = null;
+        await threadList.close();
+        await previousSession.close();
+        await chatClient.stop();
+        room.dispose();
+
+        observedMessages.clear();
+        room = _newRoomClient(
+          roomName: _liveRoomName,
+          participantName: 'dart-cold-thread-${const Uuid().v4()}',
         );
-        expect(opened, same(session));
+        chatClient = MessagingChatClient(room: room, agentName: _liveAgentName);
+        threadList = AgentThreadStorageRepository(chatClient: chatClient);
+        eventSubscription = chatClient.events.listen(
+          (event) => observedMessages.add(event.message),
+        );
+
+        await room.start();
+        room.messaging.start();
+        await room.messaging.enable();
+        await _waitUntil(
+          () => room.messaging.remoteParticipants.any(
+            (participant) =>
+                participant.getAttribute('name') == _liveAgentName &&
+                participant.getAttribute('supports_agent_messages') == true,
+          ),
+          timeout: const Duration(seconds: 30),
+          description: 'assistant participant for cold client',
+        );
+        await chatClient.start();
+        await threadList.open().timeout(const Duration(seconds: 15));
+        await _waitUntil(
+          () => threadList.entries().any(
+            (entry) => entry.path == createdThreadPath!,
+          ),
+          timeout: const Duration(seconds: 20),
+          description: 'cold thread list entry for $createdThreadPath',
+        );
+
+        expect(chatClient.sessions, isEmpty);
+        final coldSession = chatClient.openThread(createdThreadPath!);
+        session = coldSession;
+        expect(coldSession, isNot(same(previousSession)));
 
         await _waitForObservedMessage(
           observedMessages,
-          beforeObservedCount,
+          0,
           (message) =>
               message is ThreadLoaded && message.threadId == createdThreadPath!,
-          'thread replay completion',
+          'cold thread replay completion',
         );
-        expect(session!.loadState.phase, ChatThreadSessionLoadPhase.loaded);
-        _expectSessionThreadMessagesAreScoped(session!);
+        expect(coldSession.loadState.phase, ChatThreadSessionLoadPhase.loaded);
+        expect(
+          _inputTextForTurn(coldSession, initialTurnId!),
+          contains(_startPrompt),
+          reason: 'the cold replay must contain the original user input',
+        );
+        expect(
+          _turnText(coldSession, initialTurnId!),
+          contains(_startResponseMarker),
+          reason: 'the cold replay must contain the prior assistant response',
+        );
+        expect(
+          coldSession.messages.any(
+            (event) =>
+                event.message is TurnEnded &&
+                (event.message as TurnEnded).turnId == initialTurnId,
+          ),
+          isTrue,
+          reason: 'the cold replay must include the completed turn boundary',
+        );
+        expect(coldSession.lastCompletedTurnId, initialTurnId);
+        expect(coldSession.pendingInputs, isEmpty);
+        _expectSessionThreadMessagesAreScoped(coldSession);
       },
       timeout: const Timeout(Duration(minutes: 2)),
     );
@@ -374,15 +516,15 @@ void main() {
         final attachmentUrl =
             'data:text/plain;base64,${base64Encode(utf8.encode('meshagent live chat attachment'))}';
 
-        final returnedMessageId = await session!.sendText(
+        final sendFuture = session!.sendText(
           messageId: messageId,
           text:
-              'Acknowledge that this turn included one text attachment. Keep the reply short.',
+              'Acknowledge that this turn included one text attachment. '
+              'Include the exact phrase LIVE_CHAT_ATTACHMENT_OK and keep the reply short.',
           attachments: <AgentFileContent>[AgentFileContent(url: attachmentUrl)],
           senderName: 'live-dart-test',
         );
 
-        expect(returnedMessageId, messageId);
         final localTurn = session!.messages
             .map((event) => event.message)
             .whereType<TurnStart>()
@@ -401,6 +543,8 @@ void main() {
           session!.pendingInputs.map((pending) => pending.messageId),
           contains(messageId),
         );
+        final returnedMessageId = await sendFuture;
+        expect(returnedMessageId, messageId);
 
         final accepted =
             await _waitForObservedMessage(
@@ -414,31 +558,44 @@ void main() {
                 )
                 as TurnStartAccepted;
 
-        await _waitForObservedMessage(
-          observedMessages,
-          0,
-          (message) =>
-              message is TurnStarted &&
-              message.threadId == createdThreadPath! &&
-              message.sourceMessageId == messageId &&
-              message.turnId == accepted.turnId,
-          'attachment turn started',
-        );
+        final started =
+            await _waitForObservedMessage(
+                  observedMessages,
+                  0,
+                  (message) =>
+                      message is TurnStarted &&
+                      message.threadId == createdThreadPath! &&
+                      message.sourceMessageId == messageId &&
+                      message.turnId == accepted.turnId,
+                  'attachment turn started',
+                )
+                as TurnStarted;
 
-        await _waitForSessionMessage(
+        await _waitForTurnText(
           session!,
-          (message) =>
-              message is AgentTextContentDelta &&
-              message.threadId == createdThreadPath! &&
-              message.turnId == accepted.turnId,
-          'attachment turn agent response',
+          started.turnId,
+          'LIVE_CHAT_ATTACHMENT_OK',
+          'attachment turn agent response marker',
         );
+        final ended =
+            await _waitForObservedMessage(
+                  observedMessages,
+                  beforeObservedCount,
+                  (message) =>
+                      message is TurnEnded &&
+                      message.threadId == createdThreadPath! &&
+                      message.turnId == started.turnId,
+                  'attachment turn ended',
+                )
+                as TurnEnded;
+        expect(ended.error, isNull);
+        expect(session!.pendingInputs, isEmpty);
       },
       timeout: const Timeout(Duration(minutes: 2)),
     );
 
     test(
-      'queues steering and interrupts an active turn',
+      'applies steering, completes the response, and clears pending state',
       () async {
         final beforeObservedCount = observedMessages.length;
         final startMessageId = _liveId('long-turn');
@@ -476,8 +633,9 @@ void main() {
         expect(started.turnId, isNotEmpty);
 
         final beforeSteerObservedCount = observedMessages.length;
-        final steerMessageId = await session!.sendText(
-          messageId: _liveId('steer'),
+        final requestedSteerMessageId = _liveId('steer');
+        final steerSendFuture = session!.sendText(
+          messageId: requestedSteerMessageId,
           text:
               'Steer this answer: include the exact phrase LIVE_CHAT_STEER_OK before finishing.',
           attachments: const <AgentFileContent>[],
@@ -485,34 +643,160 @@ void main() {
           turnId: started.turnId,
           senderName: 'live-dart-test',
         );
-
-        await _waitForObservedMessage(
-          observedMessages,
-          beforeSteerObservedCount,
-          (message) =>
-              ((message is TurnSteerAccepted &&
-                  message.threadId == createdThreadPath! &&
-                  message.sourceMessageId == steerMessageId) ||
-              (message is TurnSteerRejected &&
-                  message.threadId == createdThreadPath! &&
-                  message.sourceMessageId == steerMessageId)),
-          'steer acknowledgement',
+        expect(
+          session!.pendingInputs.map((pending) => pending.messageId),
+          contains(requestedSteerMessageId),
         );
+        final steerMessageId = await steerSendFuture;
+        expect(steerMessageId, requestedSteerMessageId);
+
+        final steerAccepted =
+            await _waitForObservedMessage(
+                  observedMessages,
+                  beforeSteerObservedCount,
+                  (message) =>
+                      message is TurnSteerAccepted &&
+                      message.threadId == createdThreadPath! &&
+                      message.turnId == started.turnId &&
+                      message.sourceMessageId == steerMessageId,
+                  'steer acceptance',
+                )
+                as TurnSteerAccepted;
+        expect(steerAccepted.turnId, started.turnId);
+
+        final steered =
+            await _waitForObservedMessage(
+                  observedMessages,
+                  beforeSteerObservedCount,
+                  (message) =>
+                      message is TurnSteered &&
+                      message.threadId == createdThreadPath! &&
+                      message.turnId == started.turnId &&
+                      message.sourceMessageId == steerMessageId,
+                  'steer application',
+                )
+                as TurnSteered;
+        expect(steered.sourceMessageId, steerMessageId);
+        await _waitUntil(
+          () => !session!.pendingInputs.any(
+            (pending) => pending.messageId == steerMessageId,
+          ),
+          timeout: const Duration(seconds: 5),
+          description: 'steer pending input cleanup',
+        );
+        expect(
+          observedMessages.whereType<TurnSteerRejected>().where(
+            (message) => message.sourceMessageId == steerMessageId,
+          ),
+          isEmpty,
+        );
+
+        await _waitForTurnText(
+          session!,
+          started.turnId,
+          'LIVE_CHAT_STEER_OK',
+          'steered turn response marker',
+        );
+        final ended =
+            await _waitForObservedMessage(
+                  observedMessages,
+                  beforeObservedCount,
+                  (message) =>
+                      message is TurnEnded &&
+                      message.threadId == createdThreadPath! &&
+                      message.turnId == started.turnId,
+                  'steered turn ended',
+                )
+                as TurnEnded;
+        expect(ended.error, isNull);
+        expect(
+          observedMessages.whereType<TurnSteerRejected>().where(
+            (message) => message.sourceMessageId == steerMessageId,
+          ),
+          isEmpty,
+        );
+        expect(session!.pendingInputs, isEmpty);
+      },
+      timeout: const Timeout(Duration(minutes: 2)),
+    );
+
+    test(
+      'interrupts an active turn and clears its session state',
+      () async {
+        final beforeObservedCount = observedMessages.length;
+        final startMessageId = _liveId('interrupt-turn');
+        await session!.sendText(
+          messageId: startMessageId,
+          text:
+              'Write two hundred numbered points. Continue until interrupted.',
+          attachments: const <AgentFileContent>[],
+          senderName: 'live-dart-test',
+        );
+
+        final accepted =
+            await _waitForObservedMessage(
+                  observedMessages,
+                  beforeObservedCount,
+                  (message) =>
+                      message is TurnStartAccepted &&
+                      message.threadId == createdThreadPath! &&
+                      message.sourceMessageId == startMessageId,
+                  'interrupt turn acceptance',
+                )
+                as TurnStartAccepted;
+        final started =
+            await _waitForObservedMessage(
+                  observedMessages,
+                  beforeObservedCount,
+                  (message) =>
+                      message is TurnStarted &&
+                      message.threadId == createdThreadPath! &&
+                      message.sourceMessageId == startMessageId &&
+                      message.turnId == accepted.turnId,
+                  'interrupt turn started',
+                )
+                as TurnStarted;
 
         final beforeInterruptObservedCount = observedMessages.length;
         await session!.interruptTurn(started.turnId);
-
         await _waitForObservedMessage(
           observedMessages,
           beforeInterruptObservedCount,
           (message) =>
-              (message is TurnInterruptAccepted &&
-                  message.turnId == started.turnId) ||
-              (message is TurnInterrupted &&
-                  message.turnId == started.turnId) ||
-              (message is TurnEnded && message.turnId == started.turnId),
-          'interrupt acknowledgement',
+              message is TurnInterruptAccepted &&
+              message.type == agentTurnInterruptAcceptedType &&
+              message.threadId == createdThreadPath! &&
+              message.turnId == started.turnId,
+          'interrupt acceptance',
         );
+        await _waitForObservedMessage(
+          observedMessages,
+          beforeInterruptObservedCount,
+          (message) =>
+              message is TurnInterrupted &&
+              message.threadId == createdThreadPath! &&
+              message.turnId == started.turnId,
+          'turn interrupted',
+        );
+        final ended =
+            await _waitForObservedMessage(
+                  observedMessages,
+                  beforeInterruptObservedCount,
+                  (message) =>
+                      message is TurnEnded &&
+                      message.threadId == createdThreadPath! &&
+                      message.turnId == started.turnId,
+                  'interrupted turn ended',
+                )
+                as TurnEnded;
+        expect(
+          ended.error?.code,
+          anyOf(isNull, 'cancelled'),
+          reason:
+              'Codex reports an interrupted turn as completed while the default LLM backend reports it as cancelled',
+        );
+        expect(session!.lastCompletedTurnId, started.turnId);
+        expect(session!.pendingInputs, isEmpty);
       },
       timeout: const Timeout(Duration(minutes: 2)),
     );
