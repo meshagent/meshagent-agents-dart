@@ -170,6 +170,42 @@ void main() {
     },
   );
 
+  test('completed replay turns do not restore stale pending input', () {
+    final client = _FakeChatClient();
+    final session = client.openThread('dataset://threads/example');
+
+    client.handleAgentMessage(
+      TurnEnded(threadId: session.threadPath, turnId: 'turn-complete'),
+    );
+    client.handleAgentMessage(
+      TurnStart(
+        threadId: session.threadPath,
+        messageId: 'message-complete',
+        turnId: 'turn-complete',
+        content: agentInputContent(
+          text: 'completed input',
+          attachments: const <AgentFileContent>[],
+        ),
+      ),
+    );
+    client.handleAgentMessage(
+      TurnStart(
+        threadId: session.threadPath,
+        messageId: 'message-pending',
+        turnId: 'turn-pending',
+        content: agentInputContent(
+          text: 'pending input',
+          attachments: const <AgentFileContent>[],
+        ),
+      ),
+    );
+    client.handleAgentMessage(ThreadLoaded(threadId: session.threadPath));
+
+    expect(session.pendingInputs.map((pending) => pending.messageId), [
+      'message-pending',
+    ]);
+  });
+
   test(
     'thread sessions use incoming event time for pending input timestamps',
     () {
