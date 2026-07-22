@@ -1121,6 +1121,8 @@ class ChatThreadSession extends ChangeEmitter {
   final Map<String, int> _messageIndexes = <String, int>{};
   final Set<String> _localAgentMessageIds = <String>{};
   final Set<String> _pendingLocalInputMessageIds = <String>{};
+  final Set<String> _resolvedInputMessageIds = <String>{};
+  final Set<String> _completedTurnIds = <String>{};
   final Set<String> _mergedDeltaMessageIds = <String>{};
   final Map<String, PendingAgentInput> _pendingInputs =
       <String, PendingAgentInput>{};
@@ -1191,6 +1193,8 @@ class ChatThreadSession extends ChangeEmitter {
     _messageIndexes.clear();
     _localAgentMessageIds.clear();
     _pendingLocalInputMessageIds.clear();
+    _resolvedInputMessageIds.clear();
+    _completedTurnIds.clear();
     _mergedDeltaMessageIds.clear();
     _pendingInputs.clear();
     _lastCompletedTurnId = null;
@@ -1419,17 +1423,29 @@ class ChatThreadSession extends ChangeEmitter {
         type == agentTurnSteerType) {
       final normalizedMessageId = messageId.trim();
       if (normalizedMessageId.isNotEmpty) {
-        _markPending(
-          PendingAgentInput(
-            messageId: normalizedMessageId,
-            messageType: type,
-            threadPath: threadPath,
-            payload: message,
-            createdAt: event.createdAt,
-            awaitingAcceptance: true,
-            awaitingApplication: true,
-          ),
-        );
+        final wasPending = _pendingInputs.containsKey(normalizedMessageId);
+        final turnId = switch (message) {
+          TurnStart(:final turnId) => _normalizedString(turnId),
+          TurnSteer(:final turnId) => _normalizedString(turnId),
+          _ => null,
+        };
+        final wasAlreadyResolved =
+            !wasPending &&
+            (_resolvedInputMessageIds.contains(normalizedMessageId) ||
+                (turnId != null && _completedTurnIds.contains(turnId)));
+        if (!wasAlreadyResolved) {
+          _markPending(
+            PendingAgentInput(
+              messageId: normalizedMessageId,
+              messageType: type,
+              threadPath: threadPath,
+              payload: message,
+              createdAt: event.createdAt,
+              awaitingAcceptance: true,
+              awaitingApplication: true,
+            ),
+          );
+        }
         _localAgentMessageIds.add(normalizedMessageId);
       }
     } else if (type == agentTurnStartAcceptedType ||
@@ -1442,6 +1458,7 @@ class ChatThreadSession extends ChangeEmitter {
     } else if (type == agentTurnStartedType || type == agentTurnSteeredType) {
       _pendingInputs.remove(sourceMessageId);
       if (sourceMessageId != null) {
+        _resolvedInputMessageIds.add(sourceMessageId);
         _pendingLocalInputMessageIds.remove(sourceMessageId);
       }
     } else if (type == agentThreadStartRejectedType ||
@@ -1449,13 +1466,19 @@ class ChatThreadSession extends ChangeEmitter {
         type == agentTurnSteerRejectedType) {
       _pendingInputs.remove(sourceMessageId);
       if (sourceMessageId != null) {
+        _resolvedInputMessageIds.add(sourceMessageId);
         _pendingLocalInputMessageIds.remove(sourceMessageId);
       }
     } else if (type == agentTurnEndedType || type == agentThreadClearedType) {
       _pendingInputs.clear();
       _pendingLocalInputMessageIds.clear();
       if (message is TurnEnded && message.turnId.trim().isNotEmpty) {
-        _lastCompletedTurnId = message.turnId.trim();
+        final turnId = message.turnId.trim();
+        _completedTurnIds.add(turnId);
+        _lastCompletedTurnId = turnId;
+      } else if (type == agentThreadClearedType) {
+        _resolvedInputMessageIds.clear();
+        _completedTurnIds.clear();
       }
     } else if (type == agentThreadLoadedType) {
       _setLoadState(
