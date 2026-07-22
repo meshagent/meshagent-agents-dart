@@ -9,16 +9,21 @@ import 'package:test/test.dart';
 class _FakeChatClient extends BaseChatClient {
   _FakeChatClient({
     this.participantName,
+    this.participantId,
     super.threadCreatedPendingStartMatcher,
     super.deduplicateClientToolRequests,
   });
 
   final String? participantName;
+  final String? participantId;
   final sent = <AgentMessage>[];
   final attachments = <Uint8List?>[];
 
   @override
   String? localParticipantName() => participantName;
+
+  @override
+  String? localParticipantId() => participantId;
 
   @override
   Future<void> sendAgentMessage(
@@ -477,6 +482,40 @@ void main() {
   );
 
   test(
+    'thread sessions clear pending inputs on turn end and thread clear',
+    () async {
+      final client = _FakeChatClient();
+      final session = client.openThread(
+        'dataset://threads/example',
+        load: false,
+      );
+      await session.sendText(
+        messageId: 'message-1',
+        text: 'first prompt',
+        attachments: const <AgentFileContent>[],
+      );
+      expect(session.pendingInputs, hasLength(1));
+
+      client.handleAgentMessage(
+        TurnEnded(threadId: session.threadPath, turnId: 'turn-1'),
+      );
+      expect(session.pendingInputs, isEmpty);
+
+      await session.sendText(
+        messageId: 'message-2',
+        text: 'second prompt',
+        attachments: const <AgentFileContent>[],
+      );
+      expect(session.pendingInputs, hasLength(1));
+
+      client.handleAgentMessage(
+        ThreadCleared(threadId: session.threadPath, sourceMessageId: 'clear-1'),
+      );
+      expect(session.pendingInputs, isEmpty);
+    },
+  );
+
+  test(
     'thread sessions append remote accepted input before pending local inputs',
     () async {
       final client = _FakeChatClient();
@@ -638,6 +677,82 @@ void main() {
       expect((parsedContent as JsonContent).json, {'answer': 'blue'});
     },
   );
+
+  test('client tool requests are routed only to their target participant', () {
+    final client = _FakeChatClient(participantId: 'local-participant');
+    final session = client.openThread('dataset://threads/example', load: false);
+
+    AgentClientToolCallRequested request({
+      required String messageId,
+      required String requestId,
+      required String targetParticipantId,
+    }) {
+      return AgentMessage.fromJson({
+            'type': agentClientToolCallRequestedType,
+            'message_id': messageId,
+            'thread_id': session.threadPath,
+            'turn_id': 'turn-1',
+            'request_id': requestId,
+            'provider': 'openai',
+            'model': 'gpt-5.5',
+            'toolkit': 'client',
+            'tool': 'ask_user',
+            'arguments': <String, Object?>{},
+            'target_participant_id': targetParticipantId,
+          })
+          as AgentClientToolCallRequested;
+    }
+
+    client.handleAgentMessage(
+      request(
+        messageId: 'request-message-local',
+        requestId: 'request-local',
+        targetParticipantId: 'local-participant',
+      ),
+    );
+    client.handleAgentMessage(
+      request(
+        messageId: 'request-message-other',
+        requestId: 'request-other',
+        targetParticipantId: 'other-participant',
+      ),
+    );
+
+    final requests = session.messages
+        .map((event) => event.message)
+        .whereType<AgentClientToolCallRequested>()
+        .toList();
+    expect(requests, hasLength(1));
+    expect(requests.single.requestId, 'request-local');
+  });
+
+  test('retains failed and client tool completions for rendering', () {
+    final client = _FakeChatClient();
+    final session = client.openThread('dataset://threads/example', load: false);
+    final failed = AgentToolCallEnded(
+      threadId: session.threadPath,
+      turnId: 'turn-1',
+      itemId: 'tool-failed',
+      toolkit: 'openai',
+      tool: 'shell',
+      error: const AgentError(message: 'Command failed'),
+    );
+    final clientCompletion = AgentToolCallEnded(
+      threadId: session.threadPath,
+      turnId: 'turn-1',
+      itemId: 'tool-client',
+      toolkit: 'client',
+      tool: 'ask_user',
+    );
+
+    client.handleAgentMessage(failed);
+    client.handleAgentMessage(clientCompletion);
+
+    expect(
+      session.messages.map((event) => event.message),
+      containsAll(<AgentMessage>[failed, clientCompletion]),
+    );
+  });
 
   test('optional client tool guard keeps successful requests claimed', () {
     final client = _FakeChatClient(deduplicateClientToolRequests: true);
