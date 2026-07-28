@@ -524,8 +524,51 @@ abstract class BaseChatClient extends ChangeEmitter {
   }
 }
 
-class MessagingChatClient extends BaseChatClient {
-  MessagingChatClient({
+const String messagingChatThreadSubscribeType =
+    'meshagent.chat.thread.subscribe';
+const String messagingChatThreadListSubscribeType =
+    'meshagent.chat.thread_list.subscribe';
+
+sealed class MessagingChatSubscription {
+  MessagingStream get stream;
+  Future<void> close();
+}
+
+class ThreadSubscribe implements MessagingChatSubscription {
+  ThreadSubscribe({required this.threadId, required this.stream});
+
+  final String threadId;
+  @override
+  final MessagingStream stream;
+
+  bool get closed => stream.closed;
+
+  Future<void> send(AgentMessage message, {Uint8List? attachment}) {
+    return stream.sendMessage(
+      type: agentRoomMessageType,
+      message: message.toJson(),
+      attachment: attachment,
+    );
+  }
+
+  @override
+  Future<void> close() => stream.close();
+}
+
+class ThreadListSubscribe implements MessagingChatSubscription {
+  ThreadListSubscribe({required this.stream});
+
+  @override
+  final MessagingStream stream;
+
+  bool get closed => stream.closed;
+
+  @override
+  Future<void> close() => stream.close();
+}
+
+class BaseMessagingChatClient extends BaseChatClient {
+  BaseMessagingChatClient({
     required this.room,
     this.agentName,
     super.threadCreatedPendingStartMatcher,
@@ -783,6 +826,148 @@ class MessagingChatClient extends BaseChatClient {
       }
       await session.open(load: true, sinceTurn: session.lastCompletedTurnId);
     }
+  }
+}
+
+class MessagingChatClient extends BaseMessagingChatClient {
+  MessagingChatClient({
+    required super.room,
+    super.agentName,
+    super.threadCreatedPendingStartMatcher,
+    super.deduplicateClientToolRequests = true,
+  });
+
+  final Map<String, ThreadSubscribe> _threadSubscriptions =
+      <String, ThreadSubscribe>{};
+  ThreadListSubscribe? _threadListSubscription;
+  final Set<StreamSubscription<MessagingStreamEvent>> _streamSubscriptions =
+      <StreamSubscription<MessagingStreamEvent>>{};
+
+  bool _supportsThreadSubscriptions(RemoteParticipant participant) {
+    return participant.getAttribute('supports_messaging_streams') == true;
+  }
+
+  void _trackSubscription(MessagingChatSubscription subscription) {
+    late StreamSubscription<MessagingStreamEvent> eventSubscription;
+    eventSubscription = subscription.stream.events.listen(
+      (event) {
+        if (event is! MessagingStreamMessage ||
+            event.message.type != agentRoomMessageType) {
+          return;
+        }
+        final payload = event.message.message;
+        if (payload['type'] is! String) {
+          return;
+        }
+        handleAgentMessage(
+          AgentMessage.fromJson(payload),
+          createdAt: _createdAtFromPayload(payload),
+          attachment: event.message.attachment,
+        );
+      },
+      onDone: () {
+        _streamSubscriptions.remove(eventSubscription);
+        if (subscription is ThreadSubscribe) {
+          if (identical(
+            _threadSubscriptions[subscription.threadId],
+            subscription,
+          )) {
+            _threadSubscriptions.remove(subscription.threadId);
+          }
+        } else if (identical(_threadListSubscription, subscription)) {
+          _threadListSubscription = null;
+        }
+      },
+    );
+    _streamSubscriptions.add(eventSubscription);
+  }
+
+  @override
+  Future<void> sendAgentMessage(
+    AgentMessage message, {
+    Uint8List? attachment,
+  }) async {
+    await start();
+    final participant = agentParticipant();
+    if (participant == null) {
+      throw StateError('Agent messaging participant is not available.');
+    }
+    if (!_supportsThreadSubscriptions(participant)) {
+      await super.sendAgentMessage(message, attachment: attachment);
+      return;
+    }
+    if (message is OpenThread) {
+      await _threadSubscriptions.remove(message.threadId)?.close();
+      final stream = await room.messaging.stream(
+        to: participant,
+        type: messagingChatThreadSubscribeType,
+        message: message.toJson(),
+        attachment: attachment,
+      );
+      final subscription = ThreadSubscribe(
+        threadId: message.threadId,
+        stream: stream,
+      );
+      _threadSubscriptions[message.threadId] = subscription;
+      _trackSubscription(subscription);
+      return;
+    }
+    if (message is CloseThread) {
+      final subscription = _threadSubscriptions.remove(message.threadId);
+      if (subscription != null) {
+        await subscription.close();
+        return;
+      }
+    }
+    if (message is WatchThreads) {
+      await _threadListSubscription?.close();
+      final stream = await room.messaging.stream(
+        to: participant,
+        type: messagingChatThreadListSubscribeType,
+        message: message.toJson(),
+        attachment: attachment,
+      );
+      final subscription = ThreadListSubscribe(stream: stream);
+      _threadListSubscription = subscription;
+      _trackSubscription(subscription);
+      return;
+    }
+    if (message is UnwatchThreads && _threadListSubscription != null) {
+      final subscription = _threadListSubscription;
+      _threadListSubscription = null;
+      await subscription!.close();
+      return;
+    }
+    if (message is AgentThreadMessage) {
+      final subscription = _threadSubscriptions[message.threadId];
+      if (subscription != null) {
+        await subscription.send(message, attachment: attachment);
+        return;
+      }
+    }
+    await super.sendAgentMessage(message, attachment: attachment);
+  }
+
+  @override
+  Future<void> stop() async {
+    final subscriptions = <MessagingChatSubscription>[
+      ..._threadSubscriptions.values,
+      ?_threadListSubscription,
+    ];
+    _threadSubscriptions.clear();
+    _threadListSubscription = null;
+    await Future.wait(
+      subscriptions.map((subscription) => subscription.close()),
+    );
+    final eventSubscriptions =
+        List<StreamSubscription<MessagingStreamEvent>>.from(
+          _streamSubscriptions,
+        );
+    _streamSubscriptions.clear();
+    await Future.wait(
+      eventSubscriptions.map((subscription) => subscription.cancel()),
+    );
+    await super.stop();
   }
 }
 

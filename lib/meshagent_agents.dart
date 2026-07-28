@@ -7,6 +7,11 @@ export 'package:meshagent/meshagent.dart'
         FileContent,
         JsonContent,
         LinkContent,
+        MessagingStream,
+        MessagingStreamClientDisconnected,
+        MessagingStreamClosed,
+        MessagingStreamEvent,
+        MessagingStreamMessage,
         TextContent;
 
 export 'src/agent_messages.dart';
