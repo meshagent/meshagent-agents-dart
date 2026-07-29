@@ -48,6 +48,54 @@ class _RejectingOpenChatClient extends BaseChatClient {
 }
 
 void main() {
+  test(
+    'chat thread sessions inject typed messages into their thread',
+    () async {
+      final client = _FakeChatClient();
+      final session = client.openThread(
+        'dataset://threads/example',
+        load: false,
+      );
+      await Future<void>.delayed(Duration.zero);
+      client.sent.clear();
+      client.attachments.clear();
+      final replay = <AgentMessage>[
+        TurnStart(
+          threadId: session.threadPath,
+          messageId: 'stored-1',
+          content: agentInputContent(
+            text: 'stored',
+            attachments: const <AgentFileContent>[],
+          ),
+        ),
+        ThreadLoaded(threadId: session.threadPath, sourceMessageId: 'open-1'),
+      ];
+
+      await session.injectMessages(replay);
+
+      final injected = client.sent.last as InjectMessages;
+      expect(injected.type, agentMessagesInjectType);
+      expect(injected.threadId, session.threadPath);
+      expect(injected.messages, replay);
+      final json = injected.toJson();
+      expect(json['type'], agentMessagesInjectType);
+      expect(json['thread_id'], session.threadPath);
+      expect(
+        (json['messages'] as List).cast<Map<String, dynamic>>().map(
+          (message) => message['thread_id'],
+        ),
+        everyElement(session.threadPath),
+      );
+      final parsed = AgentMessage.fromJson(json) as InjectMessages;
+      expect(parsed.messages.map((message) => message.type), [
+        agentTurnStartType,
+        agentThreadLoadedType,
+      ]);
+      expect(session.messages, isEmpty);
+      expect(session.pendingInputs, isEmpty);
+    },
+  );
+
   test('agent message events expose a stable created_at timestamp', () {
     final eventTime = DateTime.utc(2026, 5, 28, 16, 11, 48, 538);
     final event = AgentMessageEvent(

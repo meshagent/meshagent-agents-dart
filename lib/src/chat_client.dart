@@ -1444,6 +1444,12 @@ class ChatThreadSession extends ChangeEmitter {
     );
   }
 
+  Future<void> injectMessages(Iterable<AgentMessage> messages) {
+    return _client.sendAgentMessage(
+      InjectMessages(threadId: threadPath, messages: messages),
+    );
+  }
+
   bool claimClientToolCall(String requestId) {
     return _client._claimClientToolRequest(threadPath, requestId);
   }

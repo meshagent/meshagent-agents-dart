@@ -20,6 +20,7 @@ const String agentThreadStartRejectedType =
     'meshagent.agent.thread.start.rejected';
 const String agentThreadOpenType = 'meshagent.agent.thread.open';
 const String agentThreadCloseType = 'meshagent.agent.thread.close';
+const String agentMessagesInjectType = 'meshagent.agent.messages.inject';
 const String agentParticipantConnectType =
     'meshagent.agent.participant.connect';
 const String agentParticipantDisconnectType =
@@ -198,6 +199,8 @@ abstract class AgentMessage {
         return _withPayloadCreatedAt(json, OpenThread.fromJson(json));
       case agentThreadCloseType:
         return _withPayloadCreatedAt(json, CloseThread.fromJson(json));
+      case agentMessagesInjectType:
+        return _withPayloadCreatedAt(json, InjectMessages.fromJson(json));
       case agentParticipantConnectType:
         return _withPayloadCreatedAt(json, ParticipantConnect.fromJson(json));
       case agentParticipantDisconnectType:
@@ -937,6 +940,30 @@ class CloseThread extends AgentThreadMessage {
     messageId: _stringOrNull(json['message_id']),
     senderName: _stringOrNull(json['sender_name']),
   );
+}
+
+class InjectMessages extends AgentThreadMessage {
+  InjectMessages({
+    required super.threadId,
+    required Iterable<AgentMessage> messages,
+    super.messageId,
+    super.senderName,
+  }) : messages = List<AgentMessage>.unmodifiable(messages),
+       super(type: agentMessagesInjectType);
+
+  final List<AgentMessage> messages;
+
+  factory InjectMessages.fromJson(Map<String, dynamic> json) => InjectMessages(
+    threadId: _requiredString(json, 'thread_id'),
+    messageId: _stringOrNull(json['message_id']),
+    senderName: _stringOrNull(json['sender_name']),
+    messages: _objectList(json['messages'], AgentMessage.fromJson),
+  );
+
+  @override
+  Map<String, dynamic> toJson() =>
+      super.toJson()
+        ..['messages'] = messages.map((message) => message.toJson()).toList();
 }
 
 class ParticipantConnect extends AgentMessage {
