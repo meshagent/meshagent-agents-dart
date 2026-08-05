@@ -525,8 +525,20 @@ class AgentThreadStorageRepository extends ThreadStorageRepository {
   void _handleThreadsListed(ThreadsListed message) {
     final nextEntries = <String, ThreadListEntry>{};
     for (final thread in message.threads) {
-      final entry = _entryFromAgentThread(thread);
+      var entry = _entryFromAgentThread(thread);
       if (entry != null) {
+        final existing = _entriesByPath[entry.path];
+        if (existing != null &&
+            existing.name.trim().isNotEmpty &&
+            existing.name.trim() != defaultUntitledThreadName &&
+            entry.name.trim() == defaultUntitledThreadName) {
+          entry = ThreadListEntry(
+            path: entry.path,
+            name: existing.name,
+            createdAt: entry.createdAt,
+            modifiedAt: entry.modifiedAt,
+          );
+        }
         nextEntries[entry.path] = entry;
       }
     }
