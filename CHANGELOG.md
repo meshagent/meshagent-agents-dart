@@ -1,3 +1,9 @@
+## [0.48.0]
+- Added Dart client support for device sessions, storage volumes, mounts, and room-server volume operations.
+- Improved repository image listing pagination and room-server client behavior.
+- Reworked Flutter-facing chat and tool rendering so threaded and injected messages preserve order and display correctly.
+- Refreshed shared Dart package dependencies for the new client surface and Builder/desktop-updater integrations.
+
 ## [0.47.1]
 - Added duplex messaging stream subscriptions and aligned replay pending-state behavior across the Dart chat clients so completed replay inputs stay resolved and pending work clears consistently.
 - Reworked room client and participant-token handling to match site-only room access and the newer ordered dispatch and close behavior.
