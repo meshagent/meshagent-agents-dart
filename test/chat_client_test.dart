@@ -283,6 +283,58 @@ void main() {
     },
   );
 
+  test('thread sessions retain attachment-only local inputs', () {
+    final client = _FakeChatClient();
+    final session = client.openThread('dataset://threads/example', load: false);
+
+    session.addAgentMessage(
+      AgentMessageEvent(
+        message: TurnStart(
+          threadId: session.threadPath,
+          messageId: 'attachment-message-1',
+          content: agentInputContent(
+            text: '',
+            attachments: const <AgentFileContent>[
+              AgentFileContent(
+                url: 'room:///attachments/screenshot.png',
+                name: 'screenshot.png',
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    expect(session.messages, hasLength(1));
+    expect(session.messages.single.message, isA<TurnStart>());
+  });
+
+  test('thread sessions retain replayed attachment-only accepted inputs', () {
+    final client = _FakeChatClient();
+    final session = client.openThread('dataset://threads/example', load: false);
+
+    session.addAgentMessage(
+      AgentMessageEvent(
+        message: TurnStartAccepted(
+          threadId: session.threadPath,
+          sourceMessageId: 'attachment-message-1',
+          content: agentInputContent(
+            text: '',
+            attachments: const <AgentFileContent>[
+              AgentFileContent(
+                url: 'room:///attachments/scratch.md',
+                name: 'scratch.md',
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    expect(session.messages, hasLength(1));
+    expect(session.messages.single.message, isA<TurnStartAccepted>());
+  });
+
   test('reloading an open thread clears stale order before replay', () async {
     final client = _FakeChatClient();
     final session = client.openThread('dataset://threads/example', load: false);
