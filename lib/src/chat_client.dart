@@ -194,6 +194,12 @@ abstract class BaseChatClient extends ChangeEmitter {
 
   AgentConnectionStatus? get connectionStatus => _connectionStatus;
 
+  /// Whether messages must wait for a room agent participant before sending.
+  ///
+  /// Direct transports, such as managed-agent WebSockets, do not expose a
+  /// room participant and can send as soon as their transport is connected.
+  bool get requiresAgentParticipant => false;
+
   Iterable<ChatThreadSession> get sessions =>
       List<ChatThreadSession>.unmodifiable(_sessionsByPath.values);
 
@@ -587,6 +593,9 @@ class BaseMessagingChatClient extends BaseChatClient {
   bool _hasConnected = false;
   bool _waitingForParticipant = false;
   bool _messagingListenerAttached = false;
+
+  @override
+  bool get requiresAgentParticipant => true;
 
   @override
   String? localParticipantName() {
