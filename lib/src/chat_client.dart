@@ -1707,7 +1707,7 @@ class ChatThreadSession extends ChangeEmitter {
     if (message is StartThread ||
         message is TurnStart ||
         message is TurnSteer) {
-      if (_agentInputText(_messageContent(message)).trim().isNotEmpty) {
+      if (_agentInputHasVisibleContent(_messageContent(message))) {
         _appendMessage(event);
         final normalizedMessageId = message.messageId.trim();
         if (normalizedMessageId.isNotEmpty) {
@@ -1723,7 +1723,7 @@ class ChatThreadSession extends ChangeEmitter {
         _pendingLocalInputMessageIds.remove(normalizedSourceMessageId);
         return;
       }
-      if (_agentInputText(message.content).trim().isNotEmpty) {
+      if (_agentInputHasVisibleContent(message.content)) {
         _appendMessage(event, beforePendingLocalInputs: true);
       }
       return;
@@ -1904,6 +1904,13 @@ String _agentInputText(List<AgentInputContent> content) {
       .whereType<AgentTextContent>()
       .map((entry) => entry.text)
       .join('\n');
+}
+
+bool _agentInputHasVisibleContent(List<AgentInputContent> content) {
+  return _agentInputText(content).trim().isNotEmpty ||
+      content.whereType<AgentFileContent>().any(
+        (entry) => entry.url.trim().isNotEmpty,
+      );
 }
 
 String? _deltaItemId(AgentMessage message) {
