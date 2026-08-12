@@ -119,6 +119,136 @@ void main() {
       await repository.close();
     });
 
+    test('preserves a saved title when a refresh returns New Chat', () async {
+      final client = _FakeChatClient();
+      final repository = AgentThreadStorageRepository(chatClient: client);
+      final open = repository.open();
+      await Future<void>.delayed(Duration.zero);
+      final request = client.sent.whereType<ListThreads>().single;
+      client.receive(
+        ThreadsListed(
+          sourceMessageId: request.messageId,
+          total: 1,
+          offset: 0,
+          limit: 200,
+          threads: const [
+            AgentThreadListEntry(
+              path: 'dataset://threads/12345678-1234-4678-9234-123456789abc',
+              name: 'Saved title',
+              createdAt: '2026-01-01T00:00:00Z',
+              modifiedAt: '2026-01-02T00:00:00Z',
+            ),
+          ],
+        ),
+      );
+      await open;
+
+      client.receive(
+        ThreadsListed(
+          sourceMessageId: 'refresh',
+          total: 1,
+          offset: 0,
+          limit: 200,
+          threads: const [
+            AgentThreadListEntry(
+              path: 'dataset://threads/12345678-1234-4678-9234-123456789abc',
+              name: 'New Chat',
+              createdAt: '2026-01-01T00:00:00Z',
+              modifiedAt: '2026-01-03T00:00:00Z',
+            ),
+          ],
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      final entry = repository.entries().single;
+      expect(entry.name, 'Saved title');
+      expect(entry.modifiedAt, '2026-01-03T00:00:00Z');
+      await repository.close();
+    });
+
+    test(
+      'preserves a manual rename when its refresh returns New Chat',
+      () async {
+        final client = _FakeChatClient();
+        final repository = AgentThreadStorageRepository(chatClient: client);
+        final open = repository.open();
+        await Future<void>.delayed(Duration.zero);
+        final request = client.sent.whereType<ListThreads>().single;
+        client.receive(
+          ThreadsListed(
+            sourceMessageId: request.messageId,
+            total: 1,
+            offset: 0,
+            limit: 200,
+            threads: const [
+              AgentThreadListEntry(
+                path: 'dataset://threads/12345678-1234-4678-9234-123456789abc',
+                name: 'Original title',
+                createdAt: '2026-01-01T00:00:00Z',
+                modifiedAt: '2026-01-02T00:00:00Z',
+              ),
+            ],
+          ),
+        );
+        await open;
+
+        await repository.renameThread(
+          'dataset://threads/12345678-1234-4678-9234-123456789abc',
+          'Manual title',
+        );
+        final refreshRequest = client.sent.whereType<ListThreads>().last;
+        client.receive(
+          ThreadsListed(
+            sourceMessageId: refreshRequest.messageId,
+            total: 1,
+            offset: 0,
+            limit: 200,
+            threads: const [
+              AgentThreadListEntry(
+                path: 'dataset://threads/12345678-1234-4678-9234-123456789abc',
+                name: 'New Chat',
+                createdAt: '2026-01-01T00:00:00Z',
+                modifiedAt: '2026-01-03T00:00:00Z',
+              ),
+            ],
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+
+        expect(repository.entries().single.name, 'Manual title');
+        await repository.close();
+      },
+    );
+
+    test('keeps New Chat for a genuinely untitled thread', () async {
+      final client = _FakeChatClient();
+      final repository = AgentThreadStorageRepository(chatClient: client);
+      final open = repository.open();
+      await Future<void>.delayed(Duration.zero);
+      final request = client.sent.whereType<ListThreads>().single;
+      client.receive(
+        ThreadsListed(
+          sourceMessageId: request.messageId,
+          total: 1,
+          offset: 0,
+          limit: 200,
+          threads: const [
+            AgentThreadListEntry(
+              path: 'dataset://threads/12345678-1234-4678-9234-123456789abc',
+              name: '',
+              createdAt: '2026-01-01T00:00:00Z',
+              modifiedAt: '2026-01-01T00:00:00Z',
+            ),
+          ],
+        ),
+      );
+      await open;
+
+      expect(repository.entries().single.name, defaultUntitledThreadName);
+      await repository.close();
+    });
+
     test('updates entries from thread lifecycle events', () async {
       final client = _FakeChatClient();
       final repository = AgentThreadStorageRepository(chatClient: client);
