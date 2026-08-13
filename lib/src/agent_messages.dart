@@ -587,6 +587,33 @@ class ClientToolkitDescription {
   };
 }
 
+class LlmAuthorization {
+  const LlmAuthorization({required this.token, required this.expiresAt});
+
+  final String token;
+  final DateTime expiresAt;
+
+  bool get isExpired => !expiresAt.toUtc().isAfter(DateTime.now().toUtc());
+
+  factory LlmAuthorization.fromJson(Map<String, dynamic> json) =>
+      LlmAuthorization(
+        token: _requiredString(json, 'token'),
+        expiresAt: DateTime.parse(_requiredString(json, 'expires_at')).toUtc(),
+      );
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+    'token': token,
+    'expires_at': expiresAt.toUtc().toIso8601String(),
+  };
+}
+
+LlmAuthorization? _llmAuthorizationOrNull(Object? value) {
+  if (value is! Map) {
+    return null;
+  }
+  return LlmAuthorization.fromJson(value.cast<String, dynamic>());
+}
+
 class StartThread extends AgentMessage {
   StartThread({
     super.messageId,
@@ -604,6 +631,7 @@ class StartThread extends AgentMessage {
     this.clientToolkits,
     this.toolkits,
     this.toolChoice,
+    this.llmAuthorization,
   }) : super(type: agentThreadStartType);
 
   final List<AgentInputContent>? content;
@@ -619,6 +647,7 @@ class StartThread extends AgentMessage {
   final List<ClientToolkitDescription>? clientToolkits;
   final Map<String, TurnToolkitConfig>? toolkits;
   final ToolChoice? toolChoice;
+  final LlmAuthorization? llmAuthorization;
 
   factory StartThread.fromJson(Map<String, dynamic> json) => StartThread(
     messageId: _stringOrNull(json['message_id']),
@@ -639,6 +668,7 @@ class StartThread extends AgentMessage {
     ),
     toolkits: _toolkitsOrNull(json['toolkits']),
     toolChoice: _toolChoiceOrNull(json['tool_choice']),
+    llmAuthorization: _llmAuthorizationOrNull(json['llm_authorization']),
   );
 
   @override
@@ -664,6 +694,8 @@ class StartThread extends AgentMessage {
           (key, value) => MapEntry(key, value.toJson()),
         ),
       if (toolChoice != null) 'tool_choice': toolChoice!.toJson(),
+      if (llmAuthorization != null)
+        'llm_authorization': llmAuthorization!.toJson(),
     });
 }
 
@@ -684,6 +716,7 @@ class TurnStart extends AgentThreadMessage {
     this.clientToolkits,
     this.toolkits,
     this.toolChoice,
+    this.llmAuthorization,
   }) : content = content ?? <AgentInputContent>[],
        super(type: agentTurnStartType);
 
@@ -699,6 +732,7 @@ class TurnStart extends AgentThreadMessage {
   final List<ClientToolkitDescription>? clientToolkits;
   final Map<String, TurnToolkitConfig>? toolkits;
   final ToolChoice? toolChoice;
+  final LlmAuthorization? llmAuthorization;
 
   factory TurnStart.fromJson(Map<String, dynamic> json) => TurnStart(
     threadId: _requiredString(json, 'thread_id'),
@@ -719,6 +753,7 @@ class TurnStart extends AgentThreadMessage {
     ),
     toolkits: _toolkitsOrNull(json['toolkits']),
     toolChoice: _toolChoiceOrNull(json['tool_choice']),
+    llmAuthorization: _llmAuthorizationOrNull(json['llm_authorization']),
   );
 
   @override
@@ -742,6 +777,8 @@ class TurnStart extends AgentThreadMessage {
           (key, value) => MapEntry(key, value.toJson()),
         ),
       if (toolChoice != null) 'tool_choice': toolChoice!.toJson(),
+      if (llmAuthorization != null)
+        'llm_authorization': llmAuthorization!.toJson(),
     });
 }
 

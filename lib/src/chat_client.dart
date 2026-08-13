@@ -161,6 +161,17 @@ typedef ThreadCreatedPendingStartMatcher =
       List<PendingThreadStartCandidate> candidates,
     );
 
+class LlmAuthorizationRequest {
+  const LlmAuthorizationRequest({this.threadId, this.provider, this.model});
+
+  final String? threadId;
+  final String? provider;
+  final String? model;
+}
+
+typedef LlmAuthorizationProvider =
+    Future<LlmAuthorization?> Function(LlmAuthorizationRequest request);
+
 class _PendingThreadStartRequest {
   const _PendingThreadStartRequest({
     required this.request,
@@ -175,10 +186,12 @@ abstract class BaseChatClient extends ChangeEmitter {
   BaseChatClient({
     this.threadCreatedPendingStartMatcher,
     this.deduplicateClientToolRequests = false,
+    this.llmAuthorizationProvider,
   });
 
   final ThreadCreatedPendingStartMatcher? threadCreatedPendingStartMatcher;
   final bool deduplicateClientToolRequests;
+  final LlmAuthorizationProvider? llmAuthorizationProvider;
   final Map<String, ChatThreadSession> _sessionsByPath =
       <String, ChatThreadSession>{};
   final Map<String, _PendingThreadStartRequest> _pendingStartRequests =
@@ -216,6 +229,28 @@ abstract class BaseChatClient extends ChangeEmitter {
   String? _cleanParticipantName(String? value) {
     final trimmed = value?.trim();
     return trimmed == null || trimmed.isEmpty ? null : trimmed;
+  }
+
+  Future<LlmAuthorization?> _resolveLlmAuthorization({
+    String? threadId,
+    String? provider,
+    String? model,
+  }) async {
+    final callback = llmAuthorizationProvider;
+    if (callback == null) {
+      return null;
+    }
+    final authorization = await callback(
+      LlmAuthorizationRequest(
+        threadId: threadId,
+        provider: provider,
+        model: model,
+      ),
+    );
+    if (authorization?.isExpired ?? false) {
+      throw StateError('LLM authorization callback returned an expired token.');
+    }
+    return authorization;
   }
 
   String? _clientToolRequestKey(String threadPath, String requestId) {
@@ -297,6 +332,9 @@ abstract class BaseChatClient extends ChangeEmitter {
         : messageId.trim();
     final resolvedSenderName =
         _cleanParticipantName(senderName) ?? localParticipantName();
+    final llmAuthorization = llmAuthorizationProvider == null
+        ? null
+        : await _resolveLlmAuthorization(provider: provider, model: model);
     final payload = StartThread(
       messageId: resolvedMessageId,
       content: omitContent
@@ -322,6 +360,7 @@ abstract class BaseChatClient extends ChangeEmitter {
       clientToolkits: clientToolkits != null && clientToolkits.isNotEmpty
           ? clientToolkits
           : null,
+      llmAuthorization: llmAuthorization,
     );
     final completer = Completer<AgentMessage>();
     _pendingStartRequests[resolvedMessageId] = _PendingThreadStartRequest(
@@ -386,6 +425,7 @@ abstract class BaseChatClient extends ChangeEmitter {
       clientToolkits: payload.clientToolkits,
       toolkits: payload.toolkits,
       toolChoice: payload.toolChoice,
+      llmAuthorization: payload.llmAuthorization,
     );
   }
 
@@ -579,6 +619,7 @@ class BaseMessagingChatClient extends BaseChatClient {
     this.agentName,
     super.threadCreatedPendingStartMatcher,
     super.deduplicateClientToolRequests = true,
+    super.llmAuthorizationProvider,
   }) {
     _attachListeners();
   }
@@ -842,6 +883,7 @@ class MessagingChatClient extends BaseMessagingChatClient {
   MessagingChatClient({
     required super.room,
     super.agentName,
+    super.llmAuthorizationProvider,
     super.threadCreatedPendingStartMatcher,
     super.deduplicateClientToolRequests = true,
   });
@@ -997,6 +1039,7 @@ class WebSocketChatClient extends BaseChatClient {
     this.reconnect = true,
     this.reconnectInitialDelay = const Duration(seconds: 1),
     this.reconnectMaxDelay = const Duration(seconds: 10),
+    super.llmAuthorizationProvider,
   }) : super(deduplicateClientToolRequests: true);
 
   final Uri url;
@@ -1488,6 +1531,13 @@ class ChatThreadSession extends ChangeEmitter {
     final resolvedMessageId = messageId == null || messageId.trim().isEmpty
         ? const Uuid().v4()
         : messageId.trim();
+    final llmAuthorization = steer
+        ? null
+        : await _client._resolveLlmAuthorization(
+            threadId: threadPath,
+            provider: provider,
+            model: model,
+          );
     final payload = steer
         ? TurnSteer(
             threadId: threadPath,
@@ -1526,6 +1576,7 @@ class ChatThreadSession extends ChangeEmitter {
             clientToolkits: clientToolkits != null && clientToolkits.isNotEmpty
                 ? clientToolkits
                 : null,
+            llmAuthorization: llmAuthorization,
           );
     _markPending(
       PendingAgentInput(
@@ -1572,6 +1623,11 @@ class ChatThreadSession extends ChangeEmitter {
     List<String>? outputModalities,
   }) async {
     final messageId = const Uuid().v4();
+    final llmAuthorization = await _client._resolveLlmAuthorization(
+      threadId: threadPath,
+      provider: provider,
+      model: model,
+    );
     await _client.sendAgentMessage(
       AgentRealtimeAudioCommit(
         threadId: threadPath,
@@ -1596,6 +1652,7 @@ class ChatThreadSession extends ChangeEmitter {
             outputModalities != null && outputModalities.isNotEmpty
             ? outputModalities
             : null,
+        llmAuthorization: llmAuthorization,
       ),
     );
     return messageId;

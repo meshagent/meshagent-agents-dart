@@ -12,6 +12,7 @@ class _FakeChatClient extends BaseChatClient {
     this.participantId,
     super.threadCreatedPendingStartMatcher,
     super.deduplicateClientToolRequests,
+    super.llmAuthorizationProvider,
   });
 
   final String? participantName;
@@ -1085,6 +1086,74 @@ void main() {
       ),
       hasLength(1),
     );
+  });
+
+  test(
+    'requests fresh LLM authorization for thread start and every non-steer turn',
+    () async {
+      var calls = 0;
+      final client = _FakeChatClient(
+        llmAuthorizationProvider: (_) async => LlmAuthorization(
+          token: 'delegation-${++calls}',
+          expiresAt: DateTime.now().toUtc().add(const Duration(minutes: 1)),
+        ),
+      );
+      final startFuture = client.startThread(
+        messageId: 'client-message-authorization',
+        message: 'hello',
+        attachments: const <AgentFileContent>[],
+        provider: 'openai',
+        model: 'gpt-5',
+      );
+      await _waitFor(() => client.sent.whereType<StartThread>().isNotEmpty);
+      client.handleAgentMessage(
+        ThreadStarted(
+          sourceMessageId: 'client-message-authorization',
+          threadId: 'dataset://threads/authorized',
+        ),
+      );
+      final result = await startFuture;
+      expect(
+        client.sent.whereType<StartThread>().first.llmAuthorization?.token,
+        'delegation-1',
+      );
+
+      await result.session.sendText(
+        text: 'second turn',
+        attachments: const <AgentFileContent>[],
+        provider: 'openai',
+        model: 'gpt-5',
+      );
+      expect(
+        client.sent.whereType<TurnStart>().last.llmAuthorization?.token,
+        'delegation-2',
+      );
+      expect(calls, 2);
+    },
+  );
+
+  test('rejects expired LLM authorization before sending the turn', () async {
+    final client = _FakeChatClient(
+      llmAuthorizationProvider: (_) async => LlmAuthorization(
+        token: 'expired',
+        expiresAt: DateTime.now().toUtc().subtract(const Duration(seconds: 1)),
+      ),
+    );
+
+    await expectLater(
+      client.startThread(
+        message: 'hello',
+        attachments: const <AgentFileContent>[],
+      ),
+      throwsA(
+        isA<StateError>().having(
+          (error) => error.message,
+          'message',
+          contains('expired token'),
+        ),
+      ),
+    );
+    expect(client.sent, isEmpty);
   });
 
   test('startThread preserves a server-created thread event', () async {
