@@ -1531,7 +1531,7 @@ class ChatThreadSession extends ChangeEmitter {
     final resolvedMessageId = messageId == null || messageId.trim().isEmpty
         ? const Uuid().v4()
         : messageId.trim();
-    final llmAuthorization = steer
+    final llmAuthorization = steer || _client.llmAuthorizationProvider == null
         ? null
         : await _client._resolveLlmAuthorization(
             threadId: threadPath,

@@ -576,6 +576,31 @@ void main() {
   );
 
   test(
+    'thread sessions add local input synchronously without LLM authorization',
+    () async {
+      final client = _FakeChatClient();
+      final session = client.openThread('dataset://threads/example');
+
+      final sendFuture = session.sendText(
+        messageId: 'message-local',
+        text: 'hello',
+        attachments: const <AgentFileContent>[],
+      );
+
+      expect(
+        session.messages
+            .map((event) => event.message)
+            .whereType<TurnStart>()
+            .single
+            .messageId,
+        'message-local',
+      );
+      expect(session.pendingInputs.single.messageId, 'message-local');
+      await sendFuture;
+    },
+  );
+
+  test(
     'thread sessions track pending inputs through acceptance and application',
     () async {
       final client = _FakeChatClient();
