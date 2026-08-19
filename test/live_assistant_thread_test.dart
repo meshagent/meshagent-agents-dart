@@ -720,153 +720,144 @@ void main() {
       timeout: const Timeout(Duration(minutes: 2)),
     );
 
-    test(
-      'interrupts an active turn and clears its session state',
-      () async {
-        final beforeObservedCount = observedMessages.length;
-        final startMessageId = _liveId('interrupt-turn');
-        await session!.sendText(
-          messageId: startMessageId,
-          text:
-              'Write two hundred numbered points. Continue until interrupted.',
-          attachments: const <AgentFileContent>[],
-          senderName: 'live-dart-test',
-        );
+    test('interrupts an active turn and clears its session state', () async {
+      final beforeObservedCount = observedMessages.length;
+      final startMessageId = _liveId('interrupt-turn');
+      await session!.sendText(
+        messageId: startMessageId,
+        text: 'Write two hundred numbered points. Continue until interrupted.',
+        attachments: const <AgentFileContent>[],
+        senderName: 'live-dart-test',
+      );
 
-        final accepted =
-            await _waitForObservedMessage(
-                  observedMessages,
-                  beforeObservedCount,
-                  (message) =>
-                      message is TurnStartAccepted &&
-                      message.threadId == createdThreadPath! &&
-                      message.sourceMessageId == startMessageId,
-                  'interrupt turn acceptance',
-                )
-                as TurnStartAccepted;
-        final started =
-            await _waitForObservedMessage(
-                  observedMessages,
-                  beforeObservedCount,
-                  (message) =>
-                      message is TurnStarted &&
-                      message.threadId == createdThreadPath! &&
-                      message.sourceMessageId == startMessageId &&
-                      message.turnId == accepted.turnId,
-                  'interrupt turn started',
-                )
-                as TurnStarted;
+      final accepted =
+          await _waitForObservedMessage(
+                observedMessages,
+                beforeObservedCount,
+                (message) =>
+                    message is TurnStartAccepted &&
+                    message.threadId == createdThreadPath! &&
+                    message.sourceMessageId == startMessageId,
+                'interrupt turn acceptance',
+              )
+              as TurnStartAccepted;
+      final started =
+          await _waitForObservedMessage(
+                observedMessages,
+                beforeObservedCount,
+                (message) =>
+                    message is TurnStarted &&
+                    message.threadId == createdThreadPath! &&
+                    message.sourceMessageId == startMessageId &&
+                    message.turnId == accepted.turnId,
+                'interrupt turn started',
+              )
+              as TurnStarted;
 
-        final beforeInterruptObservedCount = observedMessages.length;
-        await session!.interruptTurn(started.turnId);
-        await _waitForObservedMessage(
-          observedMessages,
-          beforeInterruptObservedCount,
-          (message) =>
-              message is TurnInterruptAccepted &&
-              message.type == agentTurnInterruptAcceptedType &&
-              message.threadId == createdThreadPath! &&
-              message.turnId == started.turnId,
-          'interrupt acceptance',
-        );
-        await _waitForObservedMessage(
-          observedMessages,
-          beforeInterruptObservedCount,
-          (message) =>
-              message is TurnInterrupted &&
-              message.threadId == createdThreadPath! &&
-              message.turnId == started.turnId,
-          'turn interrupted',
-        );
-        final ended =
-            await _waitForObservedMessage(
-                  observedMessages,
-                  beforeInterruptObservedCount,
-                  (message) =>
-                      message is TurnEnded &&
-                      message.threadId == createdThreadPath! &&
-                      message.turnId == started.turnId,
-                  'interrupted turn ended',
-                )
-                as TurnEnded;
-        expect(
-          ended.error?.code,
-          anyOf(isNull, 'cancelled'),
-          reason:
-              'Codex reports an interrupted turn as completed while the default LLM backend reports it as cancelled',
-        );
-        expect(session!.lastCompletedTurnId, started.turnId);
-        expect(session!.pendingInputs, isEmpty);
-      },
-      timeout: const Timeout(Duration(minutes: 2)),
-    );
+      final beforeInterruptObservedCount = observedMessages.length;
+      await session!.interruptTurn(started.turnId);
+      await _waitForObservedMessage(
+        observedMessages,
+        beforeInterruptObservedCount,
+        (message) =>
+            message is TurnInterruptAccepted &&
+            message.type == agentTurnInterruptAcceptedType &&
+            message.threadId == createdThreadPath! &&
+            message.turnId == started.turnId,
+        'interrupt acceptance',
+      );
+      await _waitForObservedMessage(
+        observedMessages,
+        beforeInterruptObservedCount,
+        (message) =>
+            message is TurnInterrupted &&
+            message.threadId == createdThreadPath! &&
+            message.turnId == started.turnId,
+        'turn interrupted',
+      );
+      final ended =
+          await _waitForObservedMessage(
+                observedMessages,
+                beforeInterruptObservedCount,
+                (message) =>
+                    message is TurnEnded &&
+                    message.threadId == createdThreadPath! &&
+                    message.turnId == started.turnId,
+                'interrupted turn ended',
+              )
+              as TurnEnded;
+      expect(
+        ended.error?.code,
+        anyOf(isNull, 'cancelled'),
+        reason:
+            'Codex reports an interrupted turn as completed while the default LLM backend reports it as cancelled',
+      );
+      expect(session!.lastCompletedTurnId, started.turnId);
+      expect(session!.pendingInputs, isEmpty);
+    }, timeout: const Timeout(Duration(minutes: 2)));
 
-    test(
-      'surfaces client tool requests as typed session messages',
-      () async {
-        final beforeObservedCount = observedMessages.length;
-        final messageId = _liveId('client-tool');
-        await session!.sendText(
-          messageId: messageId,
-          text:
-              'Use the ask_user client tool to ask whether the live Dart chat test is connected.',
-          attachments: const <AgentFileContent>[],
-          senderName: 'live-dart-test',
-          clientToolkits: const <ClientToolkitDescription>[
-            ClientToolkitDescription(
-              name: 'ask_user',
-              title: 'Ask User',
-              description: 'Ask the user a short question.',
-              inputSchema: <String, dynamic>{
-                'type': 'object',
-                'additionalProperties': false,
-                'required': <String>['prompt'],
-                'properties': <String, dynamic>{
-                  'prompt': <String, dynamic>{'type': 'string'},
-                },
+    test('surfaces client tool requests as typed session messages', () async {
+      final beforeObservedCount = observedMessages.length;
+      final messageId = _liveId('client-tool');
+      await session!.sendText(
+        messageId: messageId,
+        text:
+            'Use the ask_user client tool to ask whether the live Dart chat test is connected.',
+        attachments: const <AgentFileContent>[],
+        senderName: 'live-dart-test',
+        clientToolkits: const <ClientToolkitDescription>[
+          ClientToolkitDescription(
+            name: 'ask_user',
+            title: 'Ask User',
+            description: 'Ask the user a short question.',
+            inputSchema: <String, dynamic>{
+              'type': 'object',
+              'additionalProperties': false,
+              'required': <String>['prompt'],
+              'properties': <String, dynamic>{
+                'prompt': <String, dynamic>{'type': 'string'},
               },
-            ),
-          ],
-        );
+            },
+          ),
+        ],
+      );
 
-        final accepted =
-            await _waitForObservedMessage(
-                  observedMessages,
-                  beforeObservedCount,
-                  (message) =>
-                      message is TurnStartAccepted &&
-                      message.threadId == createdThreadPath! &&
-                      message.sourceMessageId == messageId,
-                  'client tool turn acceptance',
-                )
-                as TurnStartAccepted;
+      final accepted =
+          await _waitForObservedMessage(
+                observedMessages,
+                beforeObservedCount,
+                (message) =>
+                    message is TurnStartAccepted &&
+                    message.threadId == createdThreadPath! &&
+                    message.sourceMessageId == messageId,
+                'client tool turn acceptance',
+              )
+              as TurnStartAccepted;
 
-        await _waitForObservedMessage(
-          observedMessages,
-          0,
-          (message) =>
-              message is TurnStarted &&
-              message.threadId == createdThreadPath! &&
-              message.sourceMessageId == messageId &&
-              message.turnId == accepted.turnId,
-          'client tool turn started',
-        );
+      await _waitForObservedMessage(
+        observedMessages,
+        0,
+        (message) =>
+            message is TurnStarted &&
+            message.threadId == createdThreadPath! &&
+            message.sourceMessageId == messageId &&
+            message.turnId == accepted.turnId,
+        'client tool turn started',
+      );
 
-        await _waitForSessionMessage(
-          session!,
-          (message) =>
-              message is AgentThreadMessage &&
-              message.threadId == createdThreadPath! &&
-              ((message is AgentClientToolCallRequested &&
-                      message.turnId == accepted.turnId) ||
-                  (message is AgentToolCallArgumentsDelta &&
-                      message.turnId == accepted.turnId) ||
-                  (message is AgentTextContentDelta &&
-                      message.turnId == accepted.turnId)),
-          'client tool capable turn',
-        );
-      },
-      timeout: const Timeout(Duration(minutes: 2)),
-    );
+      await _waitForSessionMessage(
+        session!,
+        (message) =>
+            message is AgentThreadMessage &&
+            message.threadId == createdThreadPath! &&
+            ((message is AgentClientToolCallRequested &&
+                    message.turnId == accepted.turnId) ||
+                (message is AgentToolCallArgumentsDelta &&
+                    message.turnId == accepted.turnId) ||
+                (message is AgentTextContentDelta &&
+                    message.turnId == accepted.turnId)),
+        'client tool capable turn',
+      );
+    }, timeout: const Timeout(Duration(minutes: 2)));
   });
 }
