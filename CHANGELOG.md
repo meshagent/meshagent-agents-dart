@@ -1,3 +1,9 @@
+## [0.53.0]
+- Added user profile metadata and annotations to project-member models, plus optional metadata, annotations, and project ID options for profile updates.
+- Added the `user_profile_editor` role to role constants, parsing, serialization, and assignment support.
+- Improved video preview lifecycle handling and added manual retry behavior for failed playback.
+- Added `video_player_platform_interface` `^6.7.0` as a development dependency.
+
 ## [0.52.4]
 - Stability
 
