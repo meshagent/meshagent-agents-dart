@@ -1,3 +1,14 @@
+## [0.53.5]
+- Added typed project and global profile models, `project`, `user`, and `merged` views, project-local profile updates with inheritance, and sysadmin user search and profile administration.
+- Project member listings now default to merged profile data.
+- Project profile updates require `user_profile_editor`; global profile access is self-only and global annotations require sysadmin APIs.
+
+## [0.53.4]
+- Stability
+
+## [0.53.3]
+- Stability
+
 ## [0.53.2]
 - Added typed project profile views, inheritance fields, profile models, sysadmin user search, and global profile administration.
 - Project updates now modify project-local overrides and require `user_profile_editor`; global profile access is self-only and global annotations require sysadmin APIs.
