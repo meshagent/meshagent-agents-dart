@@ -1,3 +1,9 @@
+## [0.54.2]
+- Stability
+
+## [Unreleased]
+- Added `WebSocketChatClient.withAnonymous` with persistent anonymous sessions and fresh credentials on reconnect. Existing WebSocket clients now accept token providers.
+
 ## [0.54.1]
 - Stability
 

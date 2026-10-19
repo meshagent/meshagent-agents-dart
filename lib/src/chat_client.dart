@@ -1033,17 +1033,44 @@ bool _isThreadListPayload(Map<String, dynamic> payload) {
 class WebSocketChatClient extends BaseChatClient {
   WebSocketChatClient({
     required this.url,
-    required this.token,
+    String token = '',
+    this.tokenProvider,
     this.participantName,
     this.protocols = const <String>['meshagent-msgpack'],
     this.reconnect = true,
     this.reconnectInitialDelay = const Duration(seconds: 1),
     this.reconnectMaxDelay = const Duration(seconds: 10),
     super.llmAuthorizationProvider,
-  }) : super(deduplicateClientToolRequests: true);
+  }) : _token = token,
+       super(deduplicateClientToolRequests: true);
+
+  factory WebSocketChatClient.withAnonymous({
+    Uri? authorizationUrl,
+    bool reconnect = true,
+    Duration reconnectInitialDelay = const Duration(seconds: 1),
+    Duration reconnectMaxDelay = const Duration(seconds: 10),
+    LlmAuthorizationProvider? llmAuthorizationProvider,
+  }) {
+    final provider = AnonymousAccessTokenProvider(
+      resource: 'agent',
+      authorizationUrl: authorizationUrl,
+    );
+    return WebSocketChatClient(
+      url: provider.connectUrl.replace(
+        scheme: provider.connectUrl.scheme == 'https' ? 'wss' : 'ws',
+      ),
+      tokenProvider: provider,
+      reconnect: reconnect,
+      reconnectInitialDelay: reconnectInitialDelay,
+      reconnectMaxDelay: reconnectMaxDelay,
+      llmAuthorizationProvider: llmAuthorizationProvider,
+    );
+  }
 
   final Uri url;
-  final String token;
+  String _token;
+  String get token => _token;
+  final AccessTokenProvider? tokenProvider;
   final String? participantName;
   final List<String> protocols;
   final bool reconnect;
@@ -1084,19 +1111,29 @@ class WebSocketChatClient extends BaseChatClient {
       return;
     }
     _connecting = true;
-    final webSocket = WebSocketChannel.connect(
-      url,
-      protocols: _resolvedProtocols(),
-    );
-    _webSocket = webSocket;
-    _assignedParticipantId = null;
+    late final WebSocketChannel webSocket;
     try {
+      if (tokenProvider != null) _token = await tokenProvider!.getToken();
+      if (!_started || _stopping) {
+        _connecting = false;
+        return;
+      }
+      webSocket = WebSocketChannel.connect(
+        url,
+        protocols: _resolvedProtocols(),
+      );
+      _webSocket = webSocket;
+      _assignedParticipantId = null;
       await webSocket.ready;
     } catch (error) {
       _webSocket = null;
       _receiveError = error;
       _connecting = false;
-      if (isReconnect && reconnect && !_stopping) {
+      if (!_started || _stopping) return;
+      final authorizationDenied =
+          error is ProtocolHandshakeException &&
+          [400, 401, 403, 404, 423].contains(error.statusCode);
+      if (isReconnect && reconnect && !_stopping && !authorizationDenied) {
         _scheduleReconnect(reason: error.toString());
         return;
       }
@@ -1105,6 +1142,7 @@ class WebSocketChatClient extends BaseChatClient {
         message: 'Chat websocket connection failed',
         reason: error.toString(),
       );
+      if (isReconnect) return;
       rethrow;
     }
     _subscription = webSocket.stream.listen(
