@@ -1,3 +1,6 @@
+## [0.57.1]
+- Added optional ETag matching to Dart file uploads, including validation that the ETag is non-empty.
+
 ## [0.57.0]
 - Added typed Dart models and client methods for room storage connection management, including authenticated and anonymous S3, Google Cloud Storage, and Azure configurations.
 - Added Dart support for registering existing external Lance datasets as read-only room tables.
